@@ -1,0 +1,8 @@
+{
+  "required": true,
+  "package": "mod.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "refmap": "fixture.refmap.json",
+  "mixins": ["CounterMixin", "CounterAccessor", "ResettableCounterMixin"],
+  "injectors": {"defaultRequire": 1}
+}

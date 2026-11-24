@@ -3,6 +3,8 @@ package net.ccbluex.modloader.fabric;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import java.io.IOException;
+import java.net.URL;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -15,11 +17,17 @@ import net.fabricmc.api.DedicatedServerModInitializer;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.loader.api.FabricLoader;
+import net.fabricmc.loader.api.entrypoint.EntrypointContainer;
 
-/** @agent claude-fable-5-2 */
+/**
+ * @agent claude-fable-5-2
+ * @agent claude-opus-5-5
+ */
 final class FabricMod extends ModFile {
 
     private final JsonObject json;
+    /** The jars Knot was told to take classes from, null before {@link #register}. */
+    private URL[] jars;
 
     FabricMod(Framework framework, Path path, JsonObject json) {
         super(framework, path, json.get("id").getAsString());
@@ -42,7 +50,6 @@ final class FabricMod extends ModFile {
 
     @Override
     public List<String> mixinConfigs() {
-        String side = Framework.hasClass("net.minecraft.client.Minecraft") ? "client" : "server";
         List<String> configs = new ArrayList<>();
         for (JsonElement mixin : array(json, "mixins")) {
             if (mixin.isJsonPrimitive()) {
@@ -50,7 +57,7 @@ final class FabricMod extends ModFile {
             } else {
                 JsonObject config = mixin.getAsJsonObject();
                 String environment = config.has("environment") ? config.get("environment").getAsString() : "*";
-                if (environment.equals("*") || environment.equals(side)) {
+                if (environment.equals("*") || environment.equals(side())) {
                     configs.add(config.get("config").getAsString());
                 }
             }
@@ -58,45 +65,49 @@ final class FabricMod extends ModFile {
         return configs;
     }
 
+    /** Only the keys Fabric runs itself; the mods that define other keys run those. */
     @Override
     public boolean hasEntrypoints() {
-        return json.has("entrypoints");
+        JsonObject entrypoints = json.has("entrypoints") ? json.getAsJsonObject("entrypoints") : new JsonObject();
+        return !array(entrypoints, "main").isEmpty() || !array(entrypoints, side()).isEmpty();
     }
 
     @Override
-    public void start(ModClassLoader loader) throws ReflectiveOperationException {
-        run(loader, "main", ModInitializer.class, ModInitializer::onInitialize);
+    public void register(ModClassLoader loader) throws ReflectiveOperationException, IOException {
+        jars = loader.getURLs();
+        Knot.show(jars, true);
+        ModContainers.add(path, loader);
+    }
+
+    @Override
+    public void stop() {
+        ModContainers.remove(id);
+        if (jars != null) {
+            Knot.show(jars, false);
+        }
+    }
+
+    @Override
+    public void start(ModClassLoader loader) {
+        run("main", ModInitializer.class, ModInitializer::onInitialize);
         if (FabricLoader.getInstance().getEnvironmentType() == EnvType.CLIENT) {
-            run(loader, "client", ClientModInitializer.class, ClientModInitializer::onInitializeClient);
+            run("client", ClientModInitializer.class, ClientModInitializer::onInitializeClient);
         } else {
-            run(loader, "server", DedicatedServerModInitializer.class, DedicatedServerModInitializer::onInitializeServer);
+            run("server", DedicatedServerModInitializer.class, DedicatedServerModInitializer::onInitializeServer);
         }
     }
 
-    private <T> void run(ClassLoader loader, String key, Class<T> type, Consumer<T> call) throws ReflectiveOperationException {
-        if (!json.has("entrypoints")) {
-            return;
-        }
-        for (JsonElement entrypoint : array(json.getAsJsonObject("entrypoints"), key)) {
-            String value = entrypoint.isJsonPrimitive()
-                    ? entrypoint.getAsString()
-                    : entrypoint.getAsJsonObject().get("value").getAsString();
-            call.accept(type.cast(instance(loader, value)));
+    /** Through Fabric Loader, which keeps the instance other mods get for the same entrypoint. */
+    private <T> void run(String key, Class<T> type, Consumer<T> call) {
+        for (EntrypointContainer<T> entrypoint : FabricLoader.getInstance().getEntrypointContainers(key, type)) {
+            if (entrypoint.getProvider().getMetadata().getId().equals(id)) {
+                call.accept(entrypoint.getEntrypoint());
+            }
         }
     }
 
-    /** {@code Class} or {@code Class::staticField}; a Kotlin object is its INSTANCE. */
-    private static Object instance(ClassLoader loader, String value) throws ReflectiveOperationException {
-        String[] reference = value.split("::");
-        Class<?> type = Class.forName(reference[0], true, loader);
-        if (reference.length == 2) {
-            return type.getField(reference[1]).get(null);
-        }
-        try {
-            return type.getField("INSTANCE").get(null);
-        } catch (NoSuchFieldException e) {
-            return type.getDeclaredConstructor().newInstance();
-        }
+    private static String side() {
+        return Framework.hasClass("net.minecraft.client.Minecraft") ? "client" : "server";
     }
 
     private static JsonArray array(JsonObject object, String key) {

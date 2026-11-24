@@ -1,5 +1,6 @@
 package net.ccbluex.modloader;
 
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -37,10 +38,17 @@ public abstract class ModFile {
     /** Whether {@link #start} would run anything. */
     public abstract boolean hasEntrypoints();
 
+    /**
+     * Makes the mod known to the framework before its mixins apply, which may already ask the framework about
+     * it, its entrypoints included. Only called when the game has the framework.
+     */
+    public void register(ModClassLoader loader) throws ReflectiveOperationException, IOException {
+    }
+
     /** Runs what the framework runs for a mod at startup. Only called when the game has the framework. */
     public abstract void start(ModClassLoader loader) throws ReflectiveOperationException;
 
-    /** Takes back what {@link #start} registered with the framework itself. Safe when start never ran. */
+    /** Takes back what {@link #register} and {@link #start} gave the framework. Safe when neither ran. */
     public void stop() {
     }
 }

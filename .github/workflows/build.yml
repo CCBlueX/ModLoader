@@ -48,3 +48,9 @@ jobs:
             --notes "Automatic build of \`${GITHUB_SHA::7}\` from \`main\`." \
             --prerelease \
             --target "$GITHUB_SHA"
+      - name: Publish API to maven.ccbluex.net
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          ORG_GRADLE_PROJECT_mavenUsername: ${{ secrets.MAVEN_TOKEN_NAME }}
+          ORG_GRADLE_PROJECT_mavenPassword: ${{ secrets.MAVEN_TOKEN_SECRET }}
+        run: ./gradlew :api:publish -PmavenUrl=https://maven.ccbluex.net/snapshots

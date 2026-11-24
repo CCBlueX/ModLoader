@@ -24,6 +24,7 @@ public final class Agent {
 
     private static UnaryOperator<String> loader;
     private static FileTime loaderVersion;
+    private static boolean isBridged;
 
     private Agent() {
     }
@@ -61,6 +62,13 @@ public final class Agent {
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException("no Minecraft in this JVM"));
         Path lib = unpack(jar);
+        if (!isBridged) {
+            // Once per game: the JVM keeps the first Bridge it loads, and redefined classes are linked against it.
+            try (Stream<Path> bridge = Files.list(lib.resolve("boot"))) {
+                instrumentation.appendToBootstrapClassLoaderSearch(new JarFile(bridge.findFirst().orElseThrow().toFile()));
+            }
+            isBridged = true;
+        }
         try (Stream<Path> jars = Files.list(lib.resolve("runtime"))) {
             URL[] urls = jars.map(Agent::url).toArray(URL[]::new);
             return (UnaryOperator<String>) new URLClassLoader("modloader", urls, game)
@@ -73,6 +81,8 @@ public final class Agent {
     /** Copies lib/ of the jar to a temporary directory, as class loaders cannot read jars inside a jar. */
     private static Path unpack(Path jar) throws IOException {
         Path target = Files.createTempDirectory("modloader");
+        // Files registered later go first when the game exits, so a directory comes before what is in it.
+        target.toFile().deleteOnExit();
         try (JarFile file = new JarFile(jar.toFile())) {
             for (JarEntry entry : (Iterable<JarEntry>) file.stream()::iterator) {
                 if (!entry.getName().startsWith("lib/") || entry.isDirectory()) {
@@ -80,6 +90,7 @@ public final class Agent {
                 }
                 Path copy = target.resolve(entry.getName().substring("lib/".length()));
                 Files.createDirectories(copy.getParent());
+                copy.getParent().toFile().deleteOnExit();
                 try (InputStream in = file.getInputStream(entry)) {
                     Files.copy(in, copy);
                 }

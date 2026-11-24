@@ -5,5 +5,6 @@
   "name": "ModLoader Example",
   "entrypoints": {
     "main": ["net.ccbluex.modloader.example.FabricEntrypoint"]
-  }
+  },
+  "mixins": ["example.mixins.json"]
 }

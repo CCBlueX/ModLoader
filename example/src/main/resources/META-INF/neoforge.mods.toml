@@ -6,3 +6,6 @@ license = "GPL-3.0-or-later"
 modId = "example"
 version = "0.1.0"
 displayName = "ModLoader Example"
+
+[[mixins]]
+config = "example.mixins.json"

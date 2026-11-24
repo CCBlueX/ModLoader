@@ -1,0 +1,9 @@
+{
+  "required": true,
+  "package": "mixed.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": ["BookshelfMixin", "CounterAccessor", "CounterMixin", "LabelMixin", "ShelfMixin", "VaultMixin"],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "date": "2026-11-26",
+  "change": "feat: mixins on loaded classes",
+  "tool": "omp",
+  "models": [
+    {
+      "model": "claude-fable-5-2",
+      "provider": "anthropic",
+      "tokens": { "input": 142, "cachedInput": 27115386, "cacheWrite": 97097, "output": 56430 },
+      "usd": 9.23
+    }
+  ]
+}

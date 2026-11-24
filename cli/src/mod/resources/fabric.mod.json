@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "id": "mixed",
+  "version": "1",
+  "mixins": ["fixture.mixins.json"]
+}

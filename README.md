@@ -1,7 +1,8 @@
 # ModLoader
 
 Loads mods into a Minecraft that is already running, whether it runs Fabric, NeoForge, Forge or no mod framework
-at all. `modloader.jar` is the command line tool, the agent it puts into the game and the loader inside it.
+at all, and applies their mixins to the classes the game has long loaded. `modloader.jar` is the command line tool,
+the agent it puts into the game and the loader inside it.
 
 Minecraft 26.3 and later, Java 25.
 
@@ -13,6 +14,10 @@ flowchart LR
         loader -- "is the id loaded?" --> framework["Fabric, NeoForge, Forge<br/>or none"]
         loader -- "own class loader" --> mod["mod.jar"]
         framework -- entrypoints --> mod
+        loader -- "mixin configs" --> mixin["own Mixin"]
+        mixin -- "redefine" --> classes["loaded game classes"]
+        classes -- "moved methods" --> companions["companion classes"]
+        companions --> mod
     end
 ```
 
@@ -31,24 +36,41 @@ The game is found by its command line. `--pid <pid>` names it when several run, 
 `server.jar`.
 
 A mod loads once: when the game's framework or an earlier `load` already has its id, `load` says so and changes
-nothing. Jars bundled in a mod load first, by the same rule.
+nothing. Mods bundled in a jar load and unload together with it, unless the game already has them.
 
 ## What runs
 
 | In the mod | Runs in a game with |
 |---|---|
+| Mixins, and code compiled against an access widener or transformer | any framework or none |
 | `RuntimeMod` from the API | any framework or none |
-| Fabric `main`, `client` and `server` entrypoints | Fabric |
+| Fabric `main`, `client` and `server` entrypoints, and the others for the mods that ask for them; the mod is in Fabric Loader's mod list, and libraries of the game find its classes and services | Fabric |
 | NeoForge `@Mod` classes, `@EventBusSubscriber` classes, mod bus lifecycle events | NeoForge |
 | Forge `@Mod` class, `@EventBusSubscriber` classes, mod bus lifecycle events | Forge |
 
-A mod built for a framework the game lacks starts through its `RuntimeMod`; without one it is refused.
+A mod built for a framework the game lacks runs its mixins and its `RuntimeMod`; with neither it is refused.
+
+## Mixins
+
+The JVM lets a loaded class change what its methods do and nothing else: no new method, field or interface. So
+ModLoader runs a Mixin of its own over the class as the game defined it, keeps the class's shape, and moves the rest
+into a class beside it: handler methods, added methods and the new bodies of changed methods. The loaded class only
+calls over. Added fields live outside the object, and code that reads a non-public member through an access widener
+reaches it the same way. Mixins the game's own Mixin applied to the same class, such as Fabric API's, run again
+together with the mod's, as they would have at startup. Unloading the mod puts the classes back as they were.
 
 What a running game cannot take from a mod:
 
-1. Anything the game freezes at startup, such as blocks, items and other registry content.
-2. Mixins, access wideners and access transformers: they are not applied.
-3. Assets and data: the jar is not added to the resource packs.
+1. Anything tied to the game's start: registry content such as blocks and items, and what a mod only sets up in an
+   event of the start, such as its commands when the server starts.
+2. Assets and data: the jar is not added to the resource packs.
+3. A field a mixin adds gets its initializer on the first read on objects that existed before, when the initializer
+   reads nothing but the object; otherwise it starts at zero or null there.
+4. A mixin that overrides a method its target only inherits, or changes a constructor before the `super(...)` call:
+   the mod is refused with the reason. A change inside a static initializer has nothing left to change; it is left
+   out and `load` says so.
+5. An interface a mixin adds is seen by the code of the loaded mods, not by the game: the game's own `instanceof`
+   stays false. In the same way an access widener cannot make a class extendable.
 
 ## API
 
@@ -69,12 +91,22 @@ public final class MyMod implements RuntimeMod {
 }
 ```
 
-List the class in `META-INF/services/net.ccbluex.modloader.api.RuntimeMod` and compile against
-`modloader-api.jar` from the same release as `compileOnly`; the loader brings the classes. [example](example) has
-an entrypoint for every framework.
+List the class in `META-INF/services/net.ccbluex.modloader.api.RuntimeMod` and compile against the API as
+`compileOnly`; the loader brings the classes. [example](example) has an entrypoint for every framework and a mixin.
 
-`unload` closes the mod's class loader, so a rebuilt jar loads again without restarting the game. A mod that was
-started only through framework entrypoints stays until the game exits.
+```kotlin
+repositories {
+    maven("https://maven.ccbluex.net/snapshots")
+}
+
+dependencies {
+    compileOnly("net.ccbluex:modloader-api:0.1.0-SNAPSHOT")
+}
+```
+
+`unload` takes the mod's mixins out of the game and closes its class loader, so a rebuilt jar loads again without
+restarting the game. A mod that was started through framework entrypoints and has no `RuntimeMod` stays until the
+game exits: what it registered there cannot be taken back.
 
 ## Build
 

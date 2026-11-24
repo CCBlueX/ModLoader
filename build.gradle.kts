@@ -4,7 +4,7 @@ subprojects {
     apply(plugin = "java-library")
 
     group = "net.ccbluex"
-    version = "0.1.0"
+    version = "0.1.0-SNAPSHOT"
 
     extensions.configure<JavaPluginExtension> {
         toolchain.languageVersion = JavaLanguageVersion.of(25)

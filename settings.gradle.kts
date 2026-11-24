@@ -10,7 +10,7 @@ dependencyResolutionManagement {
     }
 }
 
-include("api", "loader", "cli", "example")
+include("api", "bridge", "loader", "mixin", "cli", "example")
 
 // One module per mod framework; a new one also needs its line in cli/build.gradle.kts.
 for (framework in listOf("fabric", "neoforge", "forge")) {

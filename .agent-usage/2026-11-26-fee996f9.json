@@ -1,0 +1,19 @@
+{
+  "date": "2026-11-26",
+  "change": "feat: mixins on loaded classes",
+  "tool": "omp",
+  "models": [
+    {
+      "model": "claude-opus-5-5",
+      "provider": "anthropic",
+      "tokens": { "input": 712, "cachedInput": 215952145, "cacheWrite": 497002, "output": 248779 },
+      "usd": 52.14
+    },
+    {
+      "model": "claude-haiku-5-5",
+      "provider": "anthropic",
+      "tokens": { "input": 49589, "cachedInput": 56355, "cacheWrite": 0, "output": 3851 },
+      "usd": 0.01
+    }
+  ]
+}

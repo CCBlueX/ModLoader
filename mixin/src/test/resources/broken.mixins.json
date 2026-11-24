@@ -1,0 +1,4 @@
+{
+  "package": "mod.broken",
+  "mixins": ["MissingFieldMixin"]
+}

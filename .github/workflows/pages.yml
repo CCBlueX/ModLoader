@@ -14,11 +14,9 @@ permissions:
 concurrency: pages
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    environment:
-      name: github-pages
     steps:
       - uses: actions/checkout@v7
       - name: AI usage card
@@ -29,4 +27,13 @@ jobs:
       - uses: actions/upload-pages-artifact@v5
         with:
           path: ${{ runner.temp }}/site
+
+  # Its own job: in the job that uploads it, the deployment does not always find the artifact yet.
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment:
+      name: github-pages
+    steps:
       - uses: actions/deploy-pages@v5
