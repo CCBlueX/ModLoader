@@ -1,0 +1,25 @@
+[versions]
+# What Minecraft 26.3 ships; the loader uses the game's copy.
+gson = "2.14.0"
+asm = "9.10.1"
+
+fabric-loader = "0.20.1"
+neoforge-fml = "12.0.16"
+forge = "26.3-66.1.9"
+
+[libraries]
+gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
+asm = { module = "org.ow2.asm:asm", version.ref = "asm" }
+fabric-loader = { module = "net.fabricmc:fabric-loader", version.ref = "fabric-loader" }
+neoforge-fml = { module = "net.neoforged.fancymodloader:loader", version.ref = "neoforge-fml" }
+forge-universal = { module = "net.minecraftforge:forge", version.ref = "forge" }
+forge-fmlcore = { module = "net.minecraftforge:fmlcore", version.ref = "forge" }
+forge-fmlloader = { module = "net.minecraftforge:fmlloader", version.ref = "forge" }
+forge-javafml = { module = "net.minecraftforge:javafmllanguage", version.ref = "forge" }
+forge-spi = "net.minecraftforge:forgespi:8.0.0"
+forge-eventbus = "net.minecraftforge:eventbus:7.0.6"
+forge-securemodules = "net.minecraftforge:securemodules:2.2.24"
+forge-mergetool = "net.minecraftforge:mergetool-api:1.0"
+
+[bundles]
+forge = ["forge-fmlcore", "forge-fmlloader", "forge-javafml", "forge-spi", "forge-eventbus", "forge-securemodules", "forge-mergetool", "asm"]

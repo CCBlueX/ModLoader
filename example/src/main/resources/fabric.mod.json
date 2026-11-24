@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "example",
+  "version": "0.1.0",
+  "name": "ModLoader Example",
+  "entrypoints": {
+    "main": ["net.ccbluex.modloader.example.FabricEntrypoint"]
+  }
+}

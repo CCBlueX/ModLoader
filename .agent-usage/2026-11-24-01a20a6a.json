@@ -1,0 +1,19 @@
+{
+  "date": "2026-11-24",
+  "change": "feat: runtime mod loader",
+  "tool": "omp",
+  "models": [
+    {
+      "model": "claude-fable-5-2",
+      "provider": "anthropic",
+      "tokens": { "input": 198, "cachedInput": 32992169, "cacheWrite": 422199, "output": 273319 },
+      "usd": 24.29
+    },
+    {
+      "model": "claude-haiku-5-5",
+      "provider": "anthropic",
+      "tokens": { "input": 390, "cachedInput": 9679306, "cacheWrite": 1382589, "output": 388999 },
+      "usd": 0.57
+    }
+  ]
+}

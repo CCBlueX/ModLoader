@@ -1,0 +1,45 @@
+package net.ccbluex.modloader.forge;
+
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
+import java.util.jar.JarFile;
+import java.util.jar.Manifest;
+import net.ccbluex.modloader.Framework;
+import net.ccbluex.modloader.ModFile;
+import net.ccbluex.modloader.TomlModFile;
+import net.minecraftforge.fml.ModList;
+
+/** @agent claude-fable-5-2 */
+public final class Forge implements Framework {
+
+    @Override
+    public String name() {
+        return "Forge";
+    }
+
+    @Override
+    public boolean isPresent() {
+        return Framework.hasClass("net.minecraftforge.fml.ModList");
+    }
+
+    @Override
+    public boolean isLoaded(String id) {
+        return ModList.isLoaded(id);
+    }
+
+    @Override
+    public ModFile read(Path jar) throws IOException {
+        try (JarFile file = new JarFile(jar.toFile())) {
+            Map<String, List<Map<String, String>>> toml = TomlModFile.read(file, "META-INF/mods.toml");
+            if (toml == null) {
+                return null;
+            }
+            Manifest manifest = file.getManifest();
+            String mixinConfigs = manifest == null ? null : manifest.getMainAttributes().getValue("MixinConfigs");
+            return new ForgeMod(this, jar, toml, TomlModFile.nestedJars(file),
+                    mixinConfigs == null ? List.of() : List.of(mixinConfigs.split(",")));
+        }
+    }
+}
