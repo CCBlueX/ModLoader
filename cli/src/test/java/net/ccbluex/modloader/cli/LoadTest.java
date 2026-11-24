@@ -72,7 +72,11 @@ class LoadTest {
         assertEquals("1", send("tick"));
         assertEquals("2", send("tick"));
 
-        String loaded = "loaded mixed (Fabric)\n  left out: a change to the static initializer of net.minecraft.world.Vault, which has already run";
+        // Outside its framework an injector without target is left out too, rather than refusing the mod.
+        String loaded = """
+                loaded mixed (Fabric)
+                  left out: a change to the static initializer of net.minecraft.world.Vault, which has already run
+                  left out: mixed.mixin.VaultMixin.closedBefore, which finds no target in net.minecraft.world.Vault""";
         assertEquals(loaded, cli("load", System.getProperty("mixed.jar")));
         assertEquals("mixed loaded", gameOutput.readLine());
         // The redirected private step counts double, then the injection cancels at three.

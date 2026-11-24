@@ -47,6 +47,36 @@ session's game test included.
   a dedicated server.
 - Mojang names for the game (`net.minecraft.client.Minecraft`, `net.minecraft.server.Main`) are used as strings;
   no module compiles against Minecraft.
+- `Fabric.bringIn` puts Fabric Loader and the libraries the game lacks on the system class path for good, and
+  `RunningGame` is its launcher and game provider. Until then nothing in the loader's class loader may link a
+  `net.fabricmc` class: a failed lookup sticks to the class that tried, so only `Framework.hasClass` asks.
+  `Fabric.isBroughtIn` compares class names, as a newer loader has its own `RunningGame`. A later load whose mods
+  need more of Fabric API gets those modules on top.
+- NeoForge and Forge run the game's payload channels themselves, `minecraft:register` included. In their games
+  Fabric API's networking module comes without its mixins (`FabricMod.mixinConfigs`), or its own registration
+  payload meets their codec and every connection drops in the configuration phase (`RegistrationPayload cannot
+  be cast to MinecraftRegisterPayload`). Its API classes stay; a call that needs a connection's addon, such as
+  `ClientPlayNetworking.getSendable`, fails there with a `ClassCastException`.
+- A mod whose framework did not start the game (`Framework.hasStartedGame`) is relaxed: a failing entrypoint
+  (`Mod.start`), an injector without target (`MixinHost.relax`, `MixinSession.leftOut`) or that does not fit it
+  (`MixinHost.drop`, then Mixin runs over the class again), a method change `Outliner` refuses and a failing appended
+  static initializer (`MixinManager.apply`) of a class it mixes into become `left out:` notes. An accessor whose
+  method the target has already is dropped, and `Linker` sends calls of it to the target's method. An injector that
+  names a method or call the game's framework replaced (`Framework.replacements`: NeoForge's and Forge's HUD layers
+  and screen hooks) gets its replacement, where the class has the method that took its place or no longer calls the
+  original. A framework lists only what it replaced in the running game: Forge keeps
+  `Hud.extractHotbarAndDecorations` but draws its parts as layers (`ForgeLayeredDraw`), so the HUD of a Fabric mod
+  hooked there never showed. An injector that names a method by name alone, which the framework overloaded, gets
+  the overloads its `@Inject` handler's parameters and its points' targets fit (`MixinHost.pin`): Mixin takes the
+  first by that name, on Forge often the framework's (`EntityFluidInteraction.applyCurrentTo`,
+  `Player.getDestroySpeed`, `ModelBlockRenderer.tesselateBlock`). Everything else stays strict.
+- Quilt Loader ships Fabric Loader's classes (`FabricLoaderImpl`, `FabricLauncherBase`, Knot) as shims over its
+  own: `Fabric.isPresent` is false on Quilt. The Quilt adapter reads and starts Fabric mods through the Fabric
+  adapter; only the mod list and entrypoints are Quilt's own. Quilt names its mods' mixin configs
+  `#<mod id>:<resource>`; `MixinHost` reads them without the prefix.
+- `Fabric.isPresent` asks for Knot, not for Fabric Loader's API: a Fabric layer on Forge or NeoForge (Fabricated,
+  Sinytra Connector) ships that API without Knot and owns its packages in the game's module layer, where a Fabric
+  Loader brought in would meet its classes. `Fabric.bringIn` refuses there.
 
 Mixins:
 
@@ -57,11 +87,18 @@ Mixins:
   `jdk.internal.misc.Unsafe`.
 - A class that has not run its static initializer when the compilation starts (`Linker.isInitialized`) gets the
   mixed initializer as a whole, moved like any changed method; only one that has run is cut into what ran and
-  what the mixins append. A class that initializes while its mod still compiles keeps its own initializer, and
-  nothing says so.
+  what the mixins append. On a title screen that never connected this is every packet class, which is where
+  Fabric API registers its payload types: without them a game Fabric was brought into drops every connection in
+  the configuration phase (`RegistrationPayload cannot be cast to DiscardedPayload`). A class that initializes
+  while its mod still compiles keeps its own initializer, and nothing says so.
 - A method reference in moved code goes through a stub whose receiver has the type the lambda captures, not
   the owner its handle names: javac names the superclass that declares the method, and `LambdaMetafactory`
   takes a captured argument of a static method only as the very type.
+- A lambda in moved code whose functional interface the companion cannot name, a package-private one such as
+  the line consumer of `ChatComponent.extractRenderState`, links through `Linker` (`lambda`) to a
+  `java.lang.reflect.Proxy` of that interface over the implementation: `LambdaMetafactory` takes neither the
+  erased type nor an interface of another package (`LambdaConversionException: java.lang.Object is not an
+  interface` in a world).
 - A companion calls a method its mixins added as its own static copy, unless the call is virtual and another
   class adds the same name and descriptor (`Rewriter.Companion.overridden`): a mixin of a subclass may override
   it, as Fabric's `getAddon()` of the packet listeners and every handler of a mixin that extends another are.
@@ -112,6 +149,8 @@ Mixins:
   for it on such a JDK: `JAVA_HOME=<jdk 25.0.1> ./gradlew :agent:test --rerun
   -Porg.gradle.java.installations.auto-detect=false -Porg.gradle.java.installations.paths=<jdk 25.0.1>`; without
   `--rerun` Gradle keeps the result of the other JDK.
+- A class the JVM hands back on retransformation has its methods in an order of its own; `Compiler.inFileOrder`
+  restores the class file's order before Mixin, whose selectors take the first method they match.
 - Every compilation runs Mixin over the class as the framework handed it to the game's own Mixin
   (`Framework.preMixinClass`, else `MixinManager.baselines`), with the configs that Mixin applied to it, and
   outlines against `baselines`, the bytes captured before the first redefinition. Never capture a class that is
@@ -129,16 +168,23 @@ Mixins:
 - Replacements keep the stack effect of the instruction they replace, so frames stay valid and nothing is
   recomputed, except the static initializer part (`Outliner.recompute`). A companion cannot name a non-public
   class: `Rewriter.erase` puts its public superclass in its place everywhere, frames included, and links what
-  needs the class itself (casts, constructors, members declared with it).
+  needs the class itself (casts, constructors, members declared with it). A mod's class gets the same for
+  non-public game classes, which an access widener made public only where Knot loads the game; its own fields and
+  methods are erased too, so every class of the mod agrees, and a mod method overriding a game method declared
+  with such a class stops overriding it.
 - A mixin config plugin runs in the `CompilerClassLoader` on a copy of the mod's classes, before any of its mixins
   exist. One that already uses what the mod's mixins add fails there. A plugin of a mod the game loaded is
   defined there again from the game's class file.
-- Mod classes load through `ModClassLoader`. On Fabric, Knot's parent is a `SharedClassLoader` that finds them,
-  so libraries Knot loaded see the mods' classes and services. A mod's own lookups skip it (`MOD_LOOKUP`): the JVM
-  keeps every class a loader returned, so a class Knot handed out once stays the old one after `unload`. Only
+- Mod classes load through `ModClassLoader`. On Fabric and Quilt, Knot's parent is a `SharedClassLoader` that finds
+  them, so libraries Knot loaded see the mods' classes and services. A mod's own lookups skip it (`MOD_LOOKUP`): the
+  JVM keeps every class a loader returned, so a class Knot handed out once stays the old one after `unload`. Only
   `Mod.start` and the compilation run with the mod's as context class loader.
-- Not done yet, each fails where it is used rather than at load: default methods of an interface a mixin adds;
-  non-public game classes named as a type in a mod's own classes (only companions erase them).
+- A mod's class loader takes `kotlin` and `kotlinx` classes from the loaded mods' jars before the game's
+  (`ModClassLoader.isModFirst`), and `Rewriter` counts those as the mods', not the game's: a game whose Kotlin
+  comes from another framework's language mod (KotlinLangForge on NeoForge) keeps kotlinx's services to its own
+  loader, and LiquidBounce found no `Dispatchers.Main` (`Check failed` at its start). Counted as the game's, a
+  call inside the mods' Kotlin linked to the game's copy (`AbstractMethodError ... NoReceiver.access$000`).
+- Not done yet, fails where it is used rather than at load: default methods of an interface a mixin adds.
 
 ## Agent usage
 

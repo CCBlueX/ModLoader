@@ -34,12 +34,26 @@ final class Mod implements LoadedMod {
         return file.id;
     }
 
-    void start() throws ReflectiveOperationException {
+    /** @return what the framework's entrypoints had to leave out, for the person loading the mod */
+    List<String> start() throws ReflectiveOperationException {
+        List<String> leftOut = new ArrayList<>();
         boolean present = file.framework.isPresent();
         if (present) {
             // First, as a framework may still turn the mod into a module, which no loaded class allows.
             startedByFramework = file.hasEntrypoints();
-            file.start(classLoader);
+            try {
+                file.start(classLoader);
+            } catch (RuntimeException e) {
+                if (file.framework.hasStartedGame()) {
+                    throw e;
+                }
+                // A framework brought in later never had its start, which its entrypoints may need.
+                e.printStackTrace();
+                leftOut.add(e.getMessage());
+                for (Throwable other : e.getSuppressed()) {
+                    leftOut.add(other.getMessage());
+                }
+            }
         }
         List<ServiceLoader.Provider<RuntimeMod>> providers = ServiceLoader.load(RuntimeMod.class, classLoader).stream()
                 .filter(provider -> provider.type().getClassLoader() == classLoader)
@@ -50,6 +64,7 @@ final class Mod implements LoadedMod {
         }
         entrypoints = providers.stream().map(ServiceLoader.Provider::get).toList();
         entrypoints.forEach(entrypoint -> entrypoint.load(this));
+        return leftOut;
     }
 
     /** What a framework entrypoint registered with the game stays there, so only a RuntimeMod can undo it. */
@@ -57,8 +72,18 @@ final class Mod implements LoadedMod {
         return (!startedByFramework || !entrypoints.isEmpty()) && bundled.stream().allMatch(Mod::canUnload);
     }
 
+    /** This mod and every mod bundled with it, at any depth. */
+    List<Mod> withBundled() {
+        List<Mod> all = new ArrayList<>(List.of(this));
+        bundled.forEach(mod -> all.addAll(mod.withBundled()));
+        return all;
+    }
+
     @Override
     public void unload() {
+        if (!isUnloaded) {
+            loader.checkUnload(this);
+        }
         List<Mod> going = new ArrayList<>();
         collect(going);
         // Before the mods leave the loader: their unload may still load classes from the mods bundled with them.

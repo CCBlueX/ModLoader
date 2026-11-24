@@ -1,6 +1,7 @@
 package net.ccbluex.modloader.mixin.compiler;
 
 import mod.Resettable;
+import net.ccbluex.modloader.Framework;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.spongepowered.asm.mixin.FabricUtil;
@@ -9,6 +10,7 @@ import java.io.File;
 import java.io.InputStream;
 import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.URL;
@@ -25,26 +27,37 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** @agent claude-fable-5-2 */
+/**
+ * @agent claude-fable-5-2
+ * @agent claude-opus-5-5
+ */
 class MixinSessionTest {
     /**
      * A MixinSession in a class loader of its own, as in the game; a second one in this loader would meet Mixin's statics.
      *
      * @agent claude-fable-5-2
+     * @agent claude-opus-5-5
      */
     private static final class Session {
         private final Object session;
 
-        Session() throws Exception {
+        /** @param replacements owner, in, replaced and by of each {@link Framework.Replacement}, one after the other */
+        Session(String... replacements) throws Exception {
             List<URL> classPath = new ArrayList<>();
             for (String entry : System.getProperty("java.class.path").split(File.pathSeparator)) {
                 classPath.add(new File(entry).toURI().toURL());
             }
             ClassLoader loader = new URLClassLoader(classPath.toArray(URL[]::new), ClassLoader.getPlatformClassLoader());
+            Constructor<?> replacement = loader.loadClass(Framework.Replacement.class.getName()).getDeclaredConstructors()[0];
+            List<Object> replaced = new ArrayList<>();
+            for (int i = 0; i < replacements.length; i += 4) {
+                replaced.add(replacement.newInstance(replacements[i], replacements[i + 1], replacements[i + 2], replacements[i + 3]));
+            }
             Constructor<?> constructor = loader.loadClass(MixinSession.class.getName())
-                    .getDeclaredConstructor(Function.class, Function.class, boolean.class);
+                    .getDeclaredConstructor(Function.class, Function.class, boolean.class, List.class);
             constructor.setAccessible(true);
-            session = constructor.newInstance((Function<String, byte[]>) name -> null, (Function<String, byte[]>) name -> null, false);
+            session = constructor.newInstance((Function<String, byte[]>) name -> null,
+                    (Function<String, byte[]>) name -> null, false, replaced);
         }
 
         @SuppressWarnings("unchecked")
@@ -106,7 +119,7 @@ class MixinSessionTest {
             original = in.readAllBytes();
         }
         session = new Session();
-        session.call("add", "fixture", "fixture.mixins.json", FabricUtil.COMPATIBILITY_LATEST);
+        session.call("add", "fixture", "fixture.mixins.json", false, FabricUtil.COMPATIBILITY_LATEST);
         assertEquals(Set.of("game.Counter"), session.call("targets"));
         mixed = session.call("transform", "game.Counter", original);
     }
@@ -142,18 +155,68 @@ class MixinSessionTest {
     @Test
     void throwsWhenAMixinDoesNotApply() throws Throwable {
         Session broken = new Session();
-        broken.call("add", "broken", "broken.mixins.json", FabricUtil.COMPATIBILITY_LATEST);
+        broken.call("add", "broken", "broken.mixins.json", false, FabricUtil.COMPATIBILITY_LATEST);
         Throwable failure = assertThrows(IllegalStateException.class, () -> broken.call("transform", "game.Counter", original));
         assertTrue(failure.getMessage().contains("MissingFieldMixin") && failure.getMessage().contains("@Shadow field missing"), failure.toString());
     }
 
     @Test
+    void dropsARelaxedHandlerThatDoesNotFit() throws Throwable {
+        Session relaxed = new Session();
+        relaxed.call("add", "misfit", "misfit.mixins.json", true, FabricUtil.COMPATIBILITY_LATEST);
+        byte[] mixed = relaxed.call("transform", "game.Counter", original);
+        Object counter = new MixedClassLoader(relaxed, mixed).loadClass("game.Counter").getConstructor().newInstance();
+        assertEquals(7, call(counter, "limit"), "the handler that fits");
+        assertEquals(1, call(counter, "tick"));
+        call(counter, "tick");
+        assertEquals(4, call(counter, "doubled"), "the game's own method in place of an accessor of the same name");
+        Field dropped = relaxed.session.getClass().getClassLoader().loadClass(MixinHost.class.getName()).getDeclaredField("dropped");
+        dropped.setAccessible(true);
+        assertEquals("{game.Counter=[mod.misfit.MisfitCounterMixin.tick, which does not fit game.Counter]}", dropped.get(null).toString());
+    }
+
+    @Test
+    void pointsRelaxedInjectorsAtReplacements() throws Throwable {
+        Session relaxed = new Session("game/Counter", null, "limitOf", "limit",
+                "game/Counter", "doubled", "Lgame/Counter;doubleOf(I)I", "Lgame/Counter;twice(I)I");
+        relaxed.call("add", "moved", "moved.mixins.json", true, FabricUtil.COMPATIBILITY_LATEST);
+        byte[] mixed = relaxed.call("transform", "game.Counter", original);
+        Object counter = new MixedClassLoader(relaxed, mixed).loadClass("game.Counter").getConstructor().newInstance();
+        assertEquals(9, call(counter, "limit"), "a replaced method");
+        call(counter, "tick");
+        assertEquals(10, call(counter, "doubled"), "a replaced call");
+    }
+
+    @Test
+    void pointsRelaxedInjectorsAtAReplacementOfAMethodTheClassKeeps() throws Throwable {
+        Session relaxed = new Session("game/Counter", null, "limit", "doubled");
+        relaxed.call("add", "misfit", "misfit.mixins.json", true, FabricUtil.COMPATIBILITY_LATEST);
+        byte[] mixed = relaxed.call("transform", "game.Counter", original);
+        Object counter = new MixedClassLoader(relaxed, mixed).loadClass("game.Counter").getConstructor().newInstance();
+        assertEquals(100, call(counter, "limit"));
+        assertEquals(7, call(counter, "doubled"));
+    }
+
+    @Test
+    void pinsARelaxedInjectorToTheOverloadItFits() throws Throwable {
+        Session relaxed = new Session();
+        relaxed.call("add", "overload", "overload.mixins.json", true, FabricUtil.COMPATIBILITY_LATEST);
+        byte[] mixed = relaxed.call("transform", "game.Counter", original);
+        Class<?> type = new MixedClassLoader(relaxed, mixed).loadClass("game.Counter");
+        Object counter = type.getConstructor().newInstance();
+        assertEquals(1005, type.getMethod("offset", int.class).invoke(counter, 5));
+        assertEquals(2, type.getMethod("offset", String.class).invoke(counter, "ab"));
+        assertEquals(-10, type.getMethod("scale", int.class).invoke(counter, -5));
+        assertEquals(3, type.getMethod("scale", String.class).invoke(counter, "abc"));
+    }
+
+    @Test
     void mergesOverAMethodAnotherSessionMerged() throws Throwable {
         Session game = new Session();
-        game.call("add", "first", "first.mixins.json", FabricUtil.COMPATIBILITY_LATEST);
+        game.call("add", "first", "first.mixins.json", false, FabricUtil.COMPATIBILITY_LATEST);
         byte[] started = game.call("transform", "game.Counter", original);
         Session later = new Session();
-        later.call("add", "second", "second.mixins.json", FabricUtil.COMPATIBILITY_LATEST);
+        later.call("add", "second", "second.mixins.json", false, FabricUtil.COMPATIBILITY_LATEST);
         byte[] mixed = later.call("transform", "game.Counter", started);
         Object counter = new MixedClassLoader(later, mixed).loadClass("game.Counter").getConstructor().newInstance();
         assertEquals(2, call(counter, "limit"));
@@ -162,18 +225,18 @@ class MixinSessionTest {
     @Test
     void throwsForAMissingConfig() throws Exception {
         Session empty = new Session();
-        Throwable failure = assertThrows(IllegalStateException.class, () -> empty.call("add", "nobody", "nowhere.mixins.json", FabricUtil.COMPATIBILITY_LATEST));
+        Throwable failure = assertThrows(IllegalStateException.class, () -> empty.call("add", "nobody", "nowhere.mixins.json", false, FabricUtil.COMPATIBILITY_LATEST));
         assertTrue(failure.getMessage().contains("nowhere.mixins.json"), failure.toString());
     }
 
     @Test
     void missesATargetAsTheCompatibilityLevelAllows() throws Throwable {
         Session older = new Session();
-        older.call("add", "absent", "absent.mixins.json", FabricUtil.COMPATIBILITY_0_10_0);
+        older.call("add", "absent", "absent.mixins.json", false, FabricUtil.COMPATIBILITY_0_10_0);
         assertEquals(Set.of(), older.call("targets"));
 
         Session latest = new Session();
-        latest.call("add", "absent", "absent.mixins.json", FabricUtil.COMPATIBILITY_LATEST);
+        latest.call("add", "absent", "absent.mixins.json", false, FabricUtil.COMPATIBILITY_LATEST);
         Throwable failure = assertThrows(IllegalStateException.class, () -> latest.call("targets"));
         assertTrue(failure.toString().contains("game.Missing"), failure.toString());
     }

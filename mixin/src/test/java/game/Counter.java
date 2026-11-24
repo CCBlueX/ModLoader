@@ -1,6 +1,9 @@
 package game;
 
-/** @agent claude-fable-5-2 */
+/**
+ * @agent claude-fable-5-2
+ * @agent claude-opus-5-5
+ */
 public class Counter {
     private int count;
 
@@ -15,6 +18,22 @@ public class Counter {
 
     public int limit() {
         return 100;
+    }
+
+    public int offset(String value) {
+        return value.length();
+    }
+
+    public int offset(int value) {
+        return value;
+    }
+
+    public int scale(String value) {
+        return value.length();
+    }
+
+    public int scale(int value) {
+        return Math.abs(value) * 2;
     }
 
     public int doubled() {

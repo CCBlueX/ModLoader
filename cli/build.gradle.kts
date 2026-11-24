@@ -15,6 +15,7 @@ dependencies {
 
     runtime(project(":loader"))
     runtime(project(":fabric"))
+    runtime(project(":quilt"))
     runtime(project(":neoforge"))
     runtime(project(":forge"))
 

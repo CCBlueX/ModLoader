@@ -2,10 +2,15 @@ package net.ccbluex.modloader.mixin.compiler;
 
 import com.llamalad7.mixinextras.MixinExtrasBootstrap;
 import com.llamalad7.mixinextras.utils.ClassGenUtils;
+import net.ccbluex.modloader.Framework;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.Handle;
+import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.AnnotationNode;
 import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.InvokeDynamicInsnNode;
+import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.spongepowered.asm.launch.MixinBootstrap;
 import org.spongepowered.asm.mixin.FabricUtil;
@@ -27,6 +32,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -48,6 +54,7 @@ final class MixinSession {
     private final MixinEnvironment environment;
     private final Map<String, String> mods = new HashMap<>();
     private final List<IMixinConfig> configs = new ArrayList<>();
+    private final List<IMixinConfig> relaxed = new ArrayList<>();
     private boolean selected;
     private boolean transformed;
 
@@ -55,14 +62,16 @@ final class MixinSession {
      * @param classes bytes of a class by binary name ("net.minecraft.server.MinecraftServer"), null when there is none.
      *                Asked for target classes, their superclasses and interfaces, and anything else Mixin inspects.
      * @param client  whether the game is a client; decides Mixin's side (CLIENT or SERVER)
+     * @param replacements what the game's frameworks replaced, which relaxed configs name
      */
-    MixinSession(Function<String, byte[]> sources, Function<String, byte[]> classes, boolean client) {
+    MixinSession(Function<String, byte[]> sources, Function<String, byte[]> classes, boolean client, List<Framework.Replacement> replacements) {
         if (MixinHost.classes != null) {
             throw new IllegalStateException("This class loader already ran a MixinSession");
         }
         MixinHost.sources = sources;
         MixinHost.classes = classes;
         MixinHost.client = client;
+        MixinHost.replacements = replacements;
 
         try {
             // A Fabric game leaves the names of its own services in these properties, and Mixin reads them first.
@@ -139,8 +148,10 @@ final class MixinSession {
     /**
      * Registers a mixin config (a JSON resource name such as "example.mixins.json") of the mod with this id. Only
      * before transform() or generate(): Mixin selects no configs once it changed a class.
+     *
+     * @param isRelaxed whether an injector of the config may find no target, see {@link #leftOut}
      */
-    void add(String mod, String config, int compatibility) {
+    void add(String mod, String config, boolean isRelaxed, int compatibility) {
         String id = mod == null ? config : mod;
         if (transformed) {
             throw new IllegalStateException("Mixin config " + config + " of " + id + " comes after Mixin changed a class");
@@ -161,6 +172,10 @@ final class MixinSession {
                 }
                 added.getConfig().decorate(FabricUtil.KEY_COMPATIBILITY, compatibility);
                 configs.add(added.getConfig());
+                if (isRelaxed) {
+                    MixinHost.relaxedPackages.add(added.getConfig().getMixinPackage());
+                    relaxed.add(added.getConfig());
+                }
             }
         }
     }
@@ -175,12 +190,23 @@ final class MixinSession {
         return targets;
     }
 
+    /** Whether a relaxed config targets the class: what fails there comes from a mod outside its framework. */
+    boolean isRelaxed(String target) {
+        return relaxed.stream().anyMatch(config -> config.getTargets().contains(target));
+    }
+
     /** The class with every mixin that targets it applied; the given array itself when none does. */
     byte[] transform(String name, byte[] bytes) {
         select();
         transformed = true;
         byte[] input = adopt(bytes);
-        byte[] mixed = run(() -> transformer.transformClass(environment, name, input));
+        int dropped;
+        byte[] mixed;
+        do {
+            // A dropped handler failed Mixin's run over the class, which then left it as it was.
+            dropped = MixinHost.dropped.getOrDefault(name, List.of()).size();
+            mixed = run(() -> transformer.transformClass(environment, name, input));
+        } while (MixinHost.dropped.getOrDefault(name, List.of()).size() > dropped);
         return mixed == input ? bytes : mixed;
     }
 
@@ -201,6 +227,42 @@ final class MixinSession {
         ClassWriter writer = new ClassWriter(0);
         node.accept(writer);
         return writer.toByteArray();
+    }
+
+    /**
+     * The injectors of relaxed configs that inject nothing into the mixed class or were dropped from it, in words
+     * for the person loading the mod.
+     */
+    static List<String> leftOut(ClassNode mixed) {
+        Set<String> called = new HashSet<>();
+        for (MethodNode method : mixed.methods) {
+            for (AbstractInsnNode instruction : method.instructions) {
+                if (instruction instanceof MethodInsnNode call && call.owner.equals(mixed.name)) {
+                    called.add(call.name);
+                } else if (instruction instanceof InvokeDynamicInsnNode dynamic) {
+                    for (Object argument : dynamic.bsmArgs) {
+                        if (argument instanceof Handle handle && handle.getOwner().equals(mixed.name)) {
+                            called.add(handle.getName());
+                        }
+                    }
+                }
+            }
+        }
+        List<String> notes = new ArrayList<>(MixinHost.dropped.getOrDefault(mixed.name.replace('/', '.'), List.of()));
+        for (MethodNode method : mixed.methods) {
+            if (method.invisibleAnnotations == null || called.contains(method.name)) {
+                continue;
+            }
+            for (AnnotationNode mark : method.invisibleAnnotations) {
+                if (mark.desc.equals(MixinHost.RELAXED)) {
+                    AnnotationNode merged = Annotations.getVisible(method, MixinMerged.class);
+                    String mixin = merged == null ? "a mixin" : Annotations.getValue(merged, "mixin");
+                    notes.add(mixin + "." + Annotations.getValue(mark, "value") + ", which finds no target in "
+                            + mixed.name.replace('/', '.'));
+                }
+            }
+        }
+        return notes;
     }
 
     /**

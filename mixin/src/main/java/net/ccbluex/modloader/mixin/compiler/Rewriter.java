@@ -15,6 +15,7 @@ import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FieldInsnNode;
+import org.objectweb.asm.tree.FieldNode;
 import org.objectweb.asm.tree.FrameNode;
 import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.InvokeDynamicInsnNode;
@@ -73,28 +74,27 @@ final class Rewriter {
      * @return whether anything changed
      */
     boolean rewrite(ClassNode node, ClassFiles hierarchy, Companion companion) {
+        // A companion sits in a package of its own; a mod's class reaches its own package but no hidden game class.
+        ClassFiles hidden = companion != null ? hierarchy : game;
         boolean changed = false;
         for (MethodNode method : List.copyOf(node.methods)) {
             changed |= constructors(method, hierarchy, companion != null);
             for (AbstractInsnNode instruction : method.instructions.toArray()) {
                 AbstractInsnNode replacement = switch (instruction) {
-                    case FieldInsnNode field -> field(node, hierarchy, companion, field);
-                    case MethodInsnNode call -> call(node, hierarchy, companion, call);
-                    case TypeInsnNode type -> type(hierarchy, companion, type);
+                    case FieldInsnNode field -> field(node, hierarchy, hidden, companion, field);
+                    case MethodInsnNode call -> call(node, hierarchy, hidden, companion, call);
+                    case TypeInsnNode type -> type(hidden, type);
                     default -> null;
                 };
                 if (replacement != null) {
                     method.instructions.set(instruction, replacement);
                     changed = true;
                 } else if (instruction instanceof InvokeDynamicInsnNode dynamic) {
-                    changed |= handles(node, hierarchy, companion, dynamic);
+                    changed |= handles(node, hierarchy, hidden, companion, dynamic);
                 }
             }
         }
-        if (companion != null) {
-            erase(node, hierarchy);
-        }
-        return changed;
+        return erase(node, hidden) || changed;
     }
 
     /**
@@ -157,8 +157,9 @@ final class Rewriter {
         return true;
     }
 
-    private AbstractInsnNode field(ClassNode from, ClassFiles hierarchy, Companion companion, FieldInsnNode field) {
-        if (!(companion != null && isHidden(field.desc, hierarchy))) {
+    private AbstractInsnNode field(ClassNode from, ClassFiles hierarchy, ClassFiles hidden, Companion companion, FieldInsnNode field) {
+        // A field of a mod is erased where it is declared too.
+        if (!(isHidden(field.desc, hidden) && (companion != null || isGame(field.owner)))) {
             if (!isGame(field.owner)) {
                 return null;
             }
@@ -178,7 +179,7 @@ final class Rewriter {
         };
     }
 
-    private AbstractInsnNode call(ClassNode from, ClassFiles hierarchy, Companion companion, MethodInsnNode call) {
+    private AbstractInsnNode call(ClassNode from, ClassFiles hierarchy, ClassFiles hidden, Companion companion, MethodInsnNode call) {
         if (call.name.equals("<init>") || call.owner.startsWith("[")) {
             // shortcut: a constructor the mod may not call fails as it would without us; construct through Linker once a mod needs it
             return null;
@@ -196,8 +197,12 @@ final class Rewriter {
         if (companion != null && call.owner.equals(companion.name())) {
             return null;
         }
-        // The descriptor erases to other types here; Linker finds the method by the one it was written with.
-        String declared = companion != null && isHidden(call.desc, hierarchy) ? call.desc : null;
+        // The descriptor erases to other types here; Linker finds the method by the one it was declared with, which
+        // for a method of a mod is erased of hidden game classes, as every class of a mod is.
+        String declared = !isHidden(call.desc, hidden) ? null : isGame(call.owner) ? call.desc : erase(call.desc, game);
+        if (declared != null && companion == null && !isGame(call.owner)) {
+            return null;
+        }
         if (call.getOpcode() == Opcodes.INVOKESPECIAL) {
             // In a companion this is a super call or a private call the target's code made; a mod's own stay.
             return companion == null ? null
@@ -222,9 +227,9 @@ final class Rewriter {
         };
     }
 
-    private AbstractInsnNode type(ClassFiles hierarchy, Companion companion, TypeInsnNode type) {
+    private AbstractInsnNode type(ClassFiles hidden, TypeInsnNode type) {
         String descriptor = Type.getObjectType(type.desc).getDescriptor();
-        boolean isHidden = companion != null && isHidden(descriptor, hierarchy);
+        boolean isHidden = isHidden(descriptor, hidden);
         if (!interfaces.contains(type.desc) && !isHidden) {
             return null;
         }
@@ -238,7 +243,7 @@ final class Rewriter {
     }
 
     /** A lambda or method reference names its method by handle; one the game refuses gets a method to go through. */
-    private boolean handles(ClassNode node, ClassFiles hierarchy, Companion companion, InvokeDynamicInsnNode dynamic) {
+    private boolean handles(ClassNode node, ClassFiles hierarchy, ClassFiles hidden, Companion companion, InvokeDynamicInsnNode dynamic) {
         boolean changed = false;
         for (int i = 0; i < dynamic.bsmArgs.length; i++) {
             if (!(dynamic.bsmArgs[i] instanceof Handle handle)) {
@@ -254,7 +259,7 @@ final class Rewriter {
             if (opcode < 0) {
                 continue;
             }
-            AbstractInsnNode replacement = call(node, hierarchy, companion,
+            AbstractInsnNode replacement = call(node, hierarchy, hidden, companion,
                     new MethodInsnNode(opcode, handle.getOwner(), handle.getName(), handle.getDesc(), handle.isInterface()));
             if (replacement instanceof MethodInsnNode moved) {
                 dynamic.bsmArgs[i] = new Handle(Opcodes.H_INVOKESTATIC, moved.owner, moved.name, moved.desc, false);
@@ -287,13 +292,29 @@ final class Rewriter {
     }
 
     /**
-     * Puts the nearest public superclass in place of every class the companion cannot name, wherever the JVM
-     * looks a type up or checks it: its methods, the remaining member references, invokedynamic and the frames. Every
-     * reference whose member is declared with such a type already goes through Linker.
+     * Puts the nearest public superclass in place of every class the class cannot name, wherever the JVM looks a
+     * type up or checks it: its fields and methods, the remaining member references, invokedynamic and the frames.
+     * Every reference whose member is declared with such a type already goes through Linker.
+     *
+     * @return whether anything changed
      */
-    private static void erase(ClassNode node, ClassFiles hierarchy) {
+    private static boolean erase(ClassNode node, ClassFiles hierarchy) {
+        boolean changed = false;
+        for (FieldNode field : node.fields) {
+            String erased = erase(field.desc, hierarchy);
+            if (!erased.equals(field.desc)) {
+                field.desc = erased;
+                field.signature = null;
+                changed = true;
+            }
+        }
         for (MethodNode method : node.methods) {
-            method.desc = erase(method.desc, hierarchy);
+            String erasedMethod = erase(method.desc, hierarchy);
+            if (erasedMethod.equals(method.desc) && !mentionsHidden(method, hierarchy)) {
+                continue;
+            }
+            changed = true;
+            method.desc = erasedMethod;
             method.signature = null;
             if (method.localVariables != null) {
                 for (LocalVariableNode variable : method.localVariables) {
@@ -306,6 +327,12 @@ final class Rewriter {
                     case MethodInsnNode call -> call.desc = erase(call.desc, hierarchy);
                     case FieldInsnNode field -> field.desc = erase(field.desc, hierarchy);
                     case InvokeDynamicInsnNode dynamic -> {
+                        Type functional = Type.getReturnType(dynamic.desc);
+                        if (dynamic.bsm.getOwner().equals("java/lang/invoke/LambdaMetafactory")
+                                && isHidden(functional.getDescriptor(), hierarchy)) {
+                            dynamic.bsmArgs = new Object[] {"lambda", functional.getClassName(), dynamic.bsmArgs[1]};
+                            dynamic.bsm = LINK;
+                        }
                         dynamic.desc = erase(dynamic.desc, hierarchy);
                         dynamic.bsmArgs = Arrays.stream(dynamic.bsmArgs).map(argument -> erase(argument, hierarchy)).toArray();
                     }
@@ -319,6 +346,28 @@ final class Rewriter {
                 }
             }
         }
+        return changed;
+    }
+
+    /** Whether code or frames of the method name a class the class cannot name. */
+    private static boolean mentionsHidden(MethodNode method, ClassFiles hierarchy) {
+        for (AbstractInsnNode instruction : method.instructions) {
+            boolean isHidden = switch (instruction) {
+                case MethodInsnNode call -> isHidden(call.desc, hierarchy);
+                case FieldInsnNode field -> isHidden(field.desc, hierarchy);
+                case InvokeDynamicInsnNode dynamic -> isHidden(dynamic.desc, hierarchy)
+                        || Arrays.stream(dynamic.bsmArgs).anyMatch(argument -> !erase(argument, hierarchy).equals(argument));
+                case LdcInsnNode constant -> !erase(constant.cst, hierarchy).equals(constant.cst);
+                case FrameNode frame -> Stream.concat(frame.local == null ? Stream.empty() : frame.local.stream(),
+                        frame.stack == null ? Stream.empty() : frame.stack.stream())
+                        .anyMatch(type -> !Objects.equals(eraseFrame(type, hierarchy), type));
+                default -> false;
+            };
+            if (isHidden) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static Object erase(Object constant, ClassFiles hierarchy) {

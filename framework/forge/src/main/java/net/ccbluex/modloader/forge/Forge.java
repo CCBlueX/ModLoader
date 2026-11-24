@@ -11,7 +11,10 @@ import net.ccbluex.modloader.ModFile;
 import net.ccbluex.modloader.TomlModFile;
 import net.minecraftforge.fml.ModList;
 
-/** @agent claude-fable-5-2 */
+/**
+ * @agent claude-fable-5-2
+ * @agent claude-opus-5-5
+ */
 public final class Forge implements Framework {
 
     @Override
@@ -27,6 +30,15 @@ public final class Forge implements Framework {
     @Override
     public boolean isLoaded(String id) {
         return ModList.isLoaded(id);
+    }
+
+    @Override
+    public List<Replacement> replacements() {
+        Replacement screen = new Replacement("net/minecraft/client/gui/Gui", "extractRenderState", "Lnet/minecraft/client/gui/screens/Screen;extractRenderStateWithTooltipAndSubtitles(Lnet/minecraft/client/gui/GuiGraphicsExtractor;IIF)V", "Lnet/minecraft/client/gui/Gui;drawScreen(Lnet/minecraft/client/gui/GuiGraphicsExtractor;IIF)V");
+        if (!Framework.hasClass("net.minecraftforge.client.gui.overlay.ForgeLayeredDraw")) {
+            return List.of(screen);
+        }
+        return List.of(screen, new Replacement("net/minecraft/client/gui/Hud", null, "extractHotbarAndDecorations", "extractItemHotbar"));
     }
 
     @Override

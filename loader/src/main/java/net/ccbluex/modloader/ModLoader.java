@@ -4,16 +4,20 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.instrument.Instrumentation;
 import java.lang.instrument.UnmodifiableClassException;
+import java.lang.invoke.MethodHandles;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.ServiceLoader;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -35,10 +39,16 @@ public final class ModLoader implements UnaryOperator<String> {
     private final List<Framework> frameworks = ServiceLoader.load(Framework.class, ModLoader.class.getClassLoader())
             .stream().map(ServiceLoader.Provider::get).sorted(Comparator.comparing(Framework::name)).toList();
     private final Map<String, Mod> mods = new ConcurrentHashMap<>();
+    private final Instrumentation instrumentation;
     private final MixinManager mixins;
 
     public ModLoader(Instrumentation instrumentation, Path lib) throws IOException, ReflectiveOperationException {
+        this.instrumentation = instrumentation;
         this.mixins = new MixinManager(instrumentation, lib.resolve("mixin"), this::findModClass, this::preMixinClass);
+        // Which native libraries a class loader holds, which the JDK keeps to itself.
+        Module own = ModLoader.class.getModule();
+        instrumentation.redefineModule(Object.class.getModule(), Set.of(), Map.of(),
+                Map.of("java.lang", Set.of(own), "jdk.internal.loader", Set.of(own)), Set.of(), Map.of());
         for (Framework framework : frameworks) {
             if (framework.isPresent()) {
                 framework.share(parent -> new SharedClassLoader(parent, mods.values()));
@@ -95,6 +105,9 @@ public final class ModLoader implements UnaryOperator<String> {
         StringBuilder answer = new StringBuilder("loaded " + file.id + " (" + file.framework.name() + ")");
         try {
             open(file, loaded);
+            if (!file.framework.hasStartedGame()) {
+                bringIn(file.framework, loaded, answer);
+            }
             for (Mod mod : loaded) {
                 for (String dependency : mod.file.dependencies()) {
                     if (!isLoaded(dependency) && loaded.stream().noneMatch(other -> other.id().equals(dependency))) {
@@ -108,7 +121,7 @@ public final class ModLoader implements UnaryOperator<String> {
                     mod.file.register(mod.classLoader);
                 }
             }
-            MixinManager.Compilation compilation = compileMixins();
+            MixinManager.Compilation compilation = compileMixins(mods.values());
             runOnGameThread(() -> {
                 // As at the game's start, nothing of the mods runs before they have started.
                 applyMixins(compilation).forEach(skipped -> answer.append("\n  left out: ").append(skipped));
@@ -118,7 +131,7 @@ public final class ModLoader implements UnaryOperator<String> {
                     for (Mod mod : loaded) {
                         // Libraries look their services up through the thread's class loader, which is the game's.
                         thread.setContextClassLoader(mod.classLoader);
-                        mod.start();
+                        mod.start().forEach(skipped -> answer.append("\n  left out: ").append(skipped));
                     }
                 } catch (ReflectiveOperationException e) {
                     throw new CompletionException(e);
@@ -127,12 +140,13 @@ public final class ModLoader implements UnaryOperator<String> {
                 }
             });
         } catch (Exception | LinkageError e) {
-            boolean wasAdded = false;
-            for (Mod mod : loaded) {
-                wasAdded |= mods.remove(mod.id(), mod);
-            }
-            if (wasAdded) {
-                applyMixins();
+            if (loaded.stream().anyMatch(mod -> mods.get(mod.id()) == mod)) {
+                // The game may still run code of the mods until their mixins are gone, so their classes stay found.
+                MixinManager.Compilation reverted = compileMixins(mods.values().stream().filter(mod -> !loaded.contains(mod)).toList());
+                runOnGameThread(() -> {
+                    applyMixins(reverted);
+                    loaded.forEach(mod -> mods.remove(mod.id(), mod));
+                });
             }
             loaded.forEach(Mod::close);
             throw e;
@@ -159,17 +173,37 @@ public final class ModLoader implements UnaryOperator<String> {
         return mod;
     }
 
+    /** Puts the mods that come with the framework at the front of {@code loaded}, when it comes in for them. */
+    private void bringIn(Framework framework, List<Mod> loaded, StringBuilder answer) throws IOException {
+        boolean wasPresent = framework.isPresent();
+        List<Path> jars = framework.bringIn(loaded.stream().map(mod -> mod.file).toList(), instrumentation);
+        if (jars == null) {
+            return;
+        }
+        List<Mod> first = new ArrayList<>();
+        List<String> ids = new ArrayList<>();
+        for (Path jar : jars) {
+            ModFile file = read(jar);
+            if (file != null && !isLoaded(file.id)) {
+                ids.add(open(file, first).id());
+            }
+        }
+        loaded.addAll(0, first);
+        if (!wasPresent || !ids.isEmpty()) {
+            answer.append("\n  brought in ").append(framework.name()).append(ids.isEmpty() ? "" : " with " + String.join(", ", ids));
+        }
+    }
+
     private String unload(String id) {
         Mod mod = mods.get(id);
         if (mod == null) {
             throw new IllegalArgumentException("not loaded by ModLoader");
         }
-        if (!mod.canUnload()) {
-            throw new IllegalStateException("what its " + mod.file.framework.name()
-                    + " entrypoints registered cannot be undone; restart the game");
-        }
+        checkUnload(mod);
         runOnGameThread(mod::unload);
-        return "unloaded " + id;
+        Framework framework = mod.file.framework;
+        return "unloaded " + id + (framework.isPresent() && !framework.hasStartedGame()
+                ? "\n  " + framework.name() + " and the mods that came with it stay until the game exits" : "");
     }
 
     /** Takes the mod and the mods bundled in it out of the list. */
@@ -179,25 +213,62 @@ public final class ModLoader implements UnaryOperator<String> {
         }
     }
 
+    /** Throws when the mod cannot go: before anything of it runs its unload, which could not be undone. */
+    void checkUnload(Mod mod) {
+        if (!mod.canUnload()) {
+            throw new IllegalStateException("what its " + mod.file.framework.name()
+                    + " entrypoints registered cannot be undone; restart the game");
+        }
+        for (Mod each : mod.withBundled()) {
+            for (String library : nativeLibraries(each.classLoader)) {
+                // The JVM binds a native library to its class loader until the game exits, and loads it into no other.
+                throw new IllegalStateException(each.id() + " loaded native code (" + Path.of(library).getFileName()
+                        + "), which stays until the game exits; restart the game to load it again");
+            }
+        }
+    }
+
+    /** The paths of the native libraries loaded through this class loader. */
+    @SuppressWarnings("unchecked")
+    private static Collection<String> nativeLibraries(ClassLoader loader) {
+        try {
+            // Reflection hides every field of ClassLoader; a lookup does not.
+            Class<?> type = Class.forName("jdk.internal.loader.NativeLibraries");
+            Object libraries = MethodHandles.privateLookupIn(ClassLoader.class, MethodHandles.lookup())
+                    .findGetter(ClassLoader.class, "libraries", type).invoke(loader);
+            Object loaded = MethodHandles.privateLookupIn(type, MethodHandles.lookup())
+                    .findGetter(type, "libraries", Map.class).invoke(libraries);
+            return List.copyOf(((Map<String, ?>) loaded).keySet());
+        } catch (Throwable e) {
+            throw new IllegalStateException("cannot read which native libraries a mod loaded", e);
+        }
+    }
+
     /**
      * Brings the game's classes in line with the mixins of the mods loaded right now.
      *
      * @return what the mixins ask for that had to be left out and was not left out before
      */
     List<String> applyMixins() {
-        return applyMixins(compileMixins());
+        return applyMixins(compileMixins(mods.values()));
     }
 
-    private MixinManager.Compilation compileMixins() {
+    private MixinManager.Compilation compileMixins(Collection<Mod> mods) {
         Map<String, List<String>> configs = new HashMap<>();
+        Set<String> relaxed = new HashSet<>();
         List<URL> jars = new ArrayList<>();
-        for (Mod mod : mods.values()) {
+        for (Mod mod : mods) {
             if (!mod.file.mixinConfigs().isEmpty()) {
                 configs.put(mod.id(), mod.file.mixinConfigs());
             }
+            if (!mod.file.framework.hasStartedGame()) {
+                relaxed.add(mod.id());
+            }
             jars.addAll(List.of(mod.classLoader.getURLs()));
         }
-        return mixins.compile(configs, jars);
+        List<Framework.Replacement> replacements = frameworks.stream().filter(Framework::hasStartedGame)
+                .flatMap(framework -> framework.replacements().stream()).toList();
+        return mixins.compile(configs, relaxed, replacements, jars);
     }
 
     private List<String> applyMixins(MixinManager.Compilation compilation) {

@@ -26,7 +26,7 @@ import net.fabricmc.loader.api.entrypoint.EntrypointContainer;
 final class FabricMod extends ModFile {
 
     private final JsonObject json;
-    /** The jars Knot was told to take classes from, null before {@link #register}. */
+    /** The jars Knot was told to take classes from, null before {@link #register} and in a game without Knot. */
     private URL[] jars;
 
     FabricMod(Framework framework, Path path, JsonObject json) {
@@ -50,6 +50,11 @@ final class FabricMod extends ModFile {
 
     @Override
     public List<String> mixinConfigs() {
+        boolean hasOwnNetworking = Framework.hasClass("net.neoforged.fml.ModList")
+                || Framework.hasClass("net.minecraftforge.fml.ModList");
+        if (id.equals("fabric-networking-api-v1") && hasOwnNetworking) {
+            return List.of();
+        }
         List<String> configs = new ArrayList<>();
         for (JsonElement mixin : array(json, "mixins")) {
             if (mixin.isJsonPrimitive()) {
@@ -74,8 +79,10 @@ final class FabricMod extends ModFile {
 
     @Override
     public void register(ModClassLoader loader) throws ReflectiveOperationException, IOException {
-        jars = loader.getURLs();
-        Knot.show(jars, true);
+        if (!Fabric.isBroughtIn()) {
+            jars = loader.getURLs();
+            Knot.show(jars, true);
+        }
         ModContainers.add(path, loader);
     }
 
@@ -87,21 +94,32 @@ final class FabricMod extends ModFile {
         }
     }
 
+    /** Runs every entrypoint, as Fabric does at the game's start, and then throws the first failure with the others. */
     @Override
     public void start(ModClassLoader loader) {
-        run("main", ModInitializer.class, ModInitializer::onInitialize);
+        List<RuntimeException> failures = new ArrayList<>();
+        run("main", ModInitializer.class, ModInitializer::onInitialize, failures);
         if (FabricLoader.getInstance().getEnvironmentType() == EnvType.CLIENT) {
-            run("client", ClientModInitializer.class, ClientModInitializer::onInitializeClient);
+            run("client", ClientModInitializer.class, ClientModInitializer::onInitializeClient, failures);
         } else {
-            run("server", DedicatedServerModInitializer.class, DedicatedServerModInitializer::onInitializeServer);
+            run("server", DedicatedServerModInitializer.class, DedicatedServerModInitializer::onInitializeServer, failures);
+        }
+        if (!failures.isEmpty()) {
+            failures.subList(1, failures.size()).forEach(failures.getFirst()::addSuppressed);
+            throw failures.getFirst();
         }
     }
 
     /** Through Fabric Loader, which keeps the instance other mods get for the same entrypoint. */
-    private <T> void run(String key, Class<T> type, Consumer<T> call) {
+    private <T> void run(String key, Class<T> type, Consumer<T> call, List<RuntimeException> failures) {
         for (EntrypointContainer<T> entrypoint : FabricLoader.getInstance().getEntrypointContainers(key, type)) {
             if (entrypoint.getProvider().getMetadata().getId().equals(id)) {
-                call.accept(entrypoint.getEntrypoint());
+                try {
+                    call.accept(entrypoint.getEntrypoint());
+                } catch (RuntimeException | LinkageError e) {
+                    failures.add(new IllegalStateException("the " + key + " entrypoint " + entrypoint.getDefinition() + " of " + id
+                            + ", which fails: " + e, e));
+                }
             }
         }
     }

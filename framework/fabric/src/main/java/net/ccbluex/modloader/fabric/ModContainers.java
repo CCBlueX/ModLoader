@@ -14,6 +14,7 @@ import net.fabricmc.loader.api.LanguageAdapter;
 import net.fabricmc.loader.impl.FabricLoaderImpl;
 import net.fabricmc.loader.impl.ModContainerImpl;
 import net.fabricmc.loader.impl.discovery.ModCandidateImpl;
+import net.fabricmc.loader.impl.game.GameProvider.BuiltinMod;
 import net.fabricmc.loader.impl.metadata.DependencyOverrides;
 import net.fabricmc.loader.impl.metadata.EntrypointMetadata;
 import net.fabricmc.loader.impl.metadata.LoaderModMetadata;
@@ -46,9 +47,7 @@ final class ModContainers {
         }
         Method createPlain = ModCandidateImpl.class.getDeclaredMethod("createPlain", List.class, LoaderModMetadata.class, boolean.class, Collection.class);
         createPlain.setAccessible(true);
-        Method addMod = FabricLoaderImpl.class.getDeclaredMethod("addMod", ModCandidateImpl.class);
-        addMod.setAccessible(true);
-        addMod.invoke(loader, createPlain.invoke(null, List.of(jar), metadata, false, List.of()));
+        addMod(createPlain.invoke(null, List.of(jar), metadata, false, List.of()));
 
         Object container = loader.getModContainer(metadata.getId()).orElseThrow();
         Object storage = entrypoints(loader);
@@ -65,6 +64,19 @@ final class ModContainers {
                 addEntrypoint.invoke(storage, container, key, entrypoint, adapters);
             }
         }
+    }
+
+    /** Adds a mod of the game or the JVM, which has no jar of its own. */
+    static void add(BuiltinMod mod) throws ReflectiveOperationException {
+        Method createBuiltin = ModCandidateImpl.class.getDeclaredMethod("createBuiltin", BuiltinMod.class, VersionOverrides.class, DependencyOverrides.class);
+        createBuiltin.setAccessible(true);
+        addMod(createBuiltin.invoke(null, mod, new VersionOverrides(), new DependencyOverrides(FabricLoaderImpl.INSTANCE.getConfigDir())));
+    }
+
+    private static void addMod(Object candidate) throws ReflectiveOperationException {
+        Method addMod = FabricLoaderImpl.class.getDeclaredMethod("addMod", ModCandidateImpl.class);
+        addMod.setAccessible(true);
+        addMod.invoke(FabricLoaderImpl.INSTANCE, candidate);
     }
 
     static void remove(String id) {

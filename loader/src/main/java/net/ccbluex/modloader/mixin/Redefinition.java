@@ -16,6 +16,8 @@ import java.util.Map;
  * @param fields name of every instance field the mixins add with an initializer, to the companion method that
  *               computes its value for an object that existed before
  * @param skipped what the mixins ask for that had to be left out, in words for the person loading the mod
+ * @param isRelaxed whether a mod outside the framework that started the game mixes into the class; then an
+ *                  initializer that fails is left out rather than failing the change
  * @agent claude-fable-5-2
  * @agent claude-opus-5-5
  */
@@ -27,5 +29,6 @@ public record Redefinition(
         Map<String, String> methods,
         String initializer,
         Map<String, String> fields,
-        List<String> skipped) {
+        List<String> skipped,
+        boolean isRelaxed) {
 }

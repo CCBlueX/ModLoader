@@ -20,12 +20,12 @@ import net.fabricmc.loader.api.ModContainer;
  *
  * @agent claude-opus-5-5
  */
-final class ClassLoaderAdapter implements LanguageAdapter {
+public final class ClassLoaderAdapter implements LanguageAdapter {
 
     private final ClassLoader loader;
     private final boolean isKotlin;
 
-    ClassLoaderAdapter(ClassLoader loader, boolean isKotlin) {
+    public ClassLoaderAdapter(ClassLoader loader, boolean isKotlin) {
         this.loader = loader;
         this.isKotlin = isKotlin;
     }

@@ -110,15 +110,30 @@ public final class ModClassLoader extends URLClassLoader {
         return findResource(name);
     }
 
+    public static boolean isModFirst(String name) {
+        return name.startsWith("kotlin/") || name.startsWith("kotlinx/");
+    }
+
     @Override
     protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-        return ScopedValue.where(SharedClassLoader.MOD_LOOKUP, true).call(() -> super.loadClass(name, resolve));
+        Class<?> kotlin = isModFirst(name.replace('.', '/')) ? findModClass(name) : null;
+        return kotlin != null ? kotlin
+                : ScopedValue.where(SharedClassLoader.MOD_LOOKUP, true).call(() -> super.loadClass(name, resolve));
     }
 
     /** Then the other loaded mods' own resources, which a framework with one class loader for all mods shows too. */
     @Override
     public URL getResource(String name) {
+        URL kotlin = isModFirst(name) ? findModResource(name) : null;
+        if (kotlin != null) {
+            return kotlin;
+        }
         URL found = ScopedValue.where(SharedClassLoader.MOD_LOOKUP, true).call(() -> super.getResource(name));
+        return found != null ? found : findModResource(name);
+    }
+
+    private URL findModResource(String name) {
+        URL found = findResource(name);
         for (Mod mod : mods) {
             if (found == null && mod.classLoader != this) {
                 found = mod.classLoader.findResource(name);
@@ -155,14 +170,19 @@ public final class ModClassLoader extends URLClassLoader {
 
     @Override
     protected Class<?> findClass(String name) throws ClassNotFoundException {
+        Class<?> found = findModClass(name);
+        if (found == null) {
+            throw new ClassNotFoundException(name);
+        }
+        return found;
+    }
+
+    private Class<?> findModClass(String name) {
         Class<?> found = findOwnClass(name);
         for (Mod mod : mods) {
             if (found == null && mod.classLoader != this) {
                 found = mod.classLoader.findOwnClass(name);
             }
-        }
-        if (found == null) {
-            throw new ClassNotFoundException(name);
         }
         return found;
     }

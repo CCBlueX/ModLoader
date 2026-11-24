@@ -1,8 +1,8 @@
 # ModLoader
 
-Loads mods into a Minecraft that is already running, whether it runs Fabric, NeoForge, Forge or no mod framework
-at all, and applies their mixins to the classes the game has long loaded. `modloader.jar` is the command line tool,
-the agent it puts into the game and the loader inside it.
+Loads mods into a Minecraft that is already running, whether it runs Fabric, Quilt, NeoForge, Forge or no mod
+framework at all, and applies their mixins to the classes the game has long loaded. `modloader.jar` is the command
+line tool, the agent it puts into the game and the loader inside it.
 
 Minecraft 26.3 and later, Java 25.
 
@@ -11,7 +11,7 @@ flowchart LR
     cli["java -jar modloader.jar load mod.jar"] -- attach --> agent
     subgraph game ["running Minecraft"]
         agent --> loader
-        loader -- "is the id loaded?" --> framework["Fabric, NeoForge, Forge<br/>or none"]
+        loader -- "is the id loaded?" --> framework["Fabric, Quilt, NeoForge, Forge<br/>or none"]
         loader -- "own class loader" --> mod["mod.jar"]
         framework -- entrypoints --> mod
         loader -- "mixin configs" --> mixin["own Mixin"]
@@ -44,11 +44,23 @@ nothing. Mods bundled in a jar load and unload together with it, unless the game
 |---|---|
 | Mixins, and code compiled against an access widener or transformer | any framework or none |
 | `RuntimeMod` from the API | any framework or none |
-| Fabric `main`, `client` and `server` entrypoints, and the others for the mods that ask for them; the mod is in Fabric Loader's mod list, and libraries of the game find its classes and services | Fabric |
+| Fabric `main`, `client` and `server` entrypoints, and the others for the mods that ask for them; the mod is in Fabric Loader's mod list, and libraries of the game find its classes and services | Fabric, and any other but Quilt once ModLoader brought Fabric in |
+| The same for a Fabric mod; the mod is in Quilt Loader's mod list, which the Fabric API on Quilt shows too. A `quilt.mod.json` is not read | Quilt |
 | NeoForge `@Mod` classes, `@EventBusSubscriber` classes, mod bus lifecycle events | NeoForge |
 | Forge `@Mod` class, `@EventBusSubscriber` classes, mod bus lifecycle events | Forge |
 
 A mod built for a framework the game lacks runs its mixins and its `RuntimeMod`; with neither it is refused.
+
+A Fabric mod that depends on Fabric Loader, Fabric API or Fabric Language Kotlin brings them into a game without
+Fabric (Quilt runs Fabric mods itself). The first such `load` downloads the newest stable Fabric Loader with its
+libraries from Fabric's servers, and Fabric API and Fabric Language Kotlin for the game's Minecraft version from
+Modrinth, checks each against the SHA-512 its server gives, and keeps them in `.modloader/<version>/` of the game
+directory. Later loads take them from there without asking the network; delete the directory to get newer ones.
+Fabric Loader joins the game's class path and runs without Knot. Of Fabric API only the modules come in that the
+mod names in its `depends` or whose classes its jar names, in its code or in a string, with what they depend on.
+They and Fabric Language Kotlin load before the mod like any other mod, and stay with Fabric Loader until the game
+exits. What Fabric API only does at the game's start, such as registering its content or the events of the start,
+does not happen.
 
 ## Mixins
 
@@ -66,11 +78,18 @@ What a running game cannot take from a mod:
 2. Assets and data: the jar is not added to the resource packs.
 3. A field a mixin adds gets its initializer on the first read on objects that existed before, when the initializer
    reads nothing but the object; otherwise it starts at zero or null there.
-4. A mixin that overrides a method its target only inherits, or changes a constructor before the `super(...)` call:
-   the mod is refused with the reason. A change inside a static initializer has nothing left to change; it is left
-   out and `load` says so.
+4. A mixin that overrides a method its target only inherits, changes a constructor before the `super(...)` call, or
+   appends code to a static initializer that sets a final field: the mod is refused with the reason. A change inside
+   a static initializer has nothing left to change; it is left out and `load` says so.
 5. An interface a mixin adds is seen by the code of the loaded mods, not by the game: the game's own `instanceof`
    stays false. In the same way an access widener cannot make a class extendable.
+6. A mod that loaded native code, or a mod bundled with it, cannot be unloaded: the JVM keeps the library bound to
+   the mod's class loader until the game exits and loads it into no other.
+
+A mod outside the framework that started the game, such as a Fabric mod in a NeoForge game, meets classes that
+framework never prepared for it. An injection into a part of the game NeoForge replaced, such as the hotbar it draws
+as a layer, goes to the replacement. An injection that still finds no target or does not fit it, and a change the
+list above refuses, are left out and `load` names them. Inside its own framework a mod applies in full or not at all.
 
 ## API
 

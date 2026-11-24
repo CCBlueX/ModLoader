@@ -1,0 +1,13 @@
+{
+  "date": "2026-11-26",
+  "change": "feat: fabric mods in any game",
+  "tool": "omp",
+  "models": [
+    {
+      "model": "claude-opus-5-5",
+      "provider": "anthropic",
+      "tokens": { "input": 288, "cachedInput": 46771994, "cacheWrite": 465256, "output": 121389 },
+      "usd": 15.51
+    }
+  ]
+}

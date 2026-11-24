@@ -11,6 +11,7 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.net.URL;
@@ -21,6 +22,7 @@ import java.security.ProtectionDomain;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.ServiceLoader;
@@ -28,6 +30,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.stream.Stream;
+import net.ccbluex.modloader.Framework;
 import net.ccbluex.modloader.bridge.Bridge;
 
 /**
@@ -87,9 +90,12 @@ public final class MixinManager {
      * Runs Mixin over the game's classes for these configs. Slow; changes nothing in the game.
      *
      * @param configs mixin config names by the id of their mod
+     * @param relaxed ids of the mods whose injectors may find no target, see {@link MixinCompiler#compile}
+     * @param replacements what the game's frameworks replaced, see {@link MixinCompiler#compile}
      * @param modJars the jars of every loaded mod
      */
-    public synchronized Compilation compile(Map<String, List<String>> configs, List<URL> modJars) {
+    public synchronized Compilation compile(Map<String, List<String>> configs, Set<String> relaxed,
+            List<Framework.Replacement> replacements, List<URL> modJars) {
         this.modJars = modJars;
         MixinCompiler next = compiler(modJars);
         if (configs.isEmpty()) {
@@ -100,7 +106,8 @@ public final class MixinManager {
         // A mixin plugin may look services of its mod up through the thread's class loader.
         thread.setContextClassLoader(next.getClass().getClassLoader());
         try {
-            return new Compilation(next, next.compile(configs, this::gameConfigs, preMixinClasses, this::baseline, this::isInitialized));
+            return new Compilation(next, next.compile(configs, relaxed, replacements, this::gameConfigs, preMixinClasses, this::baseline,
+                    this::isInitialized));
         } finally {
             thread.setContextClassLoader(context);
         }
@@ -140,6 +147,7 @@ public final class MixinManager {
         Map<Class<?>, List<Class<?>>> interfaces = new HashMap<>();
         List<ClassDefinition> definitions = new ArrayList<>();
         Map<Class<?>, Method> initializers = new HashMap<>();
+        Set<Class<?>> relaxed = new HashSet<>();
         Map<String, MethodHandle> fields = new HashMap<>();
         for (Map.Entry<String, Redefinition> entry : redefinitions.entrySet()) {
             Redefinition redefinition = entry.getValue();
@@ -164,6 +172,9 @@ public final class MixinManager {
                 }
             }
             methods.put(target, addedMethods);
+            if (redefinition.isRelaxed()) {
+                relaxed.add(target);
+            }
             for (String name : redefinition.interfaces()) {
                 register(interfaces, Class.forName(name, false, generated), target);
             }
@@ -177,11 +188,24 @@ public final class MixinManager {
 
         companions.putAll(added);
         linker.generation = new Linker.Generation(companions, methods, interfaces, fields);
+        List<String> failed = new ArrayList<>();
         try {
             for (Map.Entry<Class<?>, Method> initializer : initializers.entrySet()) {
                 // The name carries a hash of the code: static state set up before survives other mods coming and going.
                 if (!initializer.getValue().getName().equals(initialized.put(initializer.getKey(), initializer.getValue().getName()))) {
-                    initializer.getValue().invoke(null);
+                    try {
+                        initializer.getValue().invoke(null);
+                    } catch (InvocationTargetException e) {
+                        if (!relaxed.contains(initializer.getKey())) {
+                            throw e;
+                        }
+                        Throwable cause = e;
+                        while (cause.getCause() != null) {
+                            cause = cause.getCause();
+                        }
+                        failed.add("what the mixins append to the static initializer of " + initializer.getKey().getName()
+                                + ", which fails: " + cause);
+                    }
                 }
             }
             instrumentation.redefineClasses(definitions.toArray(ClassDefinition[]::new));
@@ -195,8 +219,10 @@ public final class MixinManager {
         linker.forget(methods.keySet());
         redefined = Set.copyOf(methods.keySet());
         Set<String> before = skipped;
-        skipped = new HashSet<>();
+        // In order, so that notes of one class stay together.
+        skipped = new LinkedHashSet<>();
         redefinitions.values().forEach(redefinition -> skipped.addAll(redefinition.skipped()));
+        skipped.addAll(failed);
         return skipped.stream().filter(note -> !before.contains(note)).toList();
     }
 

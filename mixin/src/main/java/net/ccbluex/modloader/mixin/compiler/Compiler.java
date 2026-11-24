@@ -2,6 +2,8 @@ package net.ccbluex.modloader.mixin.compiler;
 
 import java.net.URLClassLoader;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -39,34 +41,39 @@ public final class Compiler implements MixinCompiler {
     private volatile MixinSession session;
 
     @Override
-    public Map<String, Redefinition> compile(Map<String, List<String>> configs, Function<String, List<GameConfig>> gameConfigs,
-            Function<String, byte[]> sources, Function<String, byte[]> classes, Predicate<String> initialized) {
-        MixinSession mixin = new MixinSession(sources, classes, Framework.hasClass("net.minecraft.client.Minecraft"));
-        configs.forEach((mod, names) -> names.forEach(config -> mixin.add(mod, config, FabricUtil.COMPATIBILITY_LATEST)));
+    public Map<String, Redefinition> compile(Map<String, List<String>> configs, Set<String> relaxed, List<Framework.Replacement> replacements,
+            Function<String, List<GameConfig>> gameConfigs, Function<String, byte[]> sources, Function<String, byte[]> classes,
+            Predicate<String> initialized) {
+        MixinSession mixin = new MixinSession(sources, classes, Framework.hasClass("net.minecraft.client.Minecraft"), replacements);
+        configs.forEach((mod, names) -> names.forEach(config -> mixin.add(mod, config, relaxed.contains(mod), FabricUtil.COMPATIBILITY_LATEST)));
         Set<String> targets = mixin.targets();
         // Mixins of the game's own on the same classes, as each injector has to see the others' targets.
         Map<Integer, GameConfig> applied = new TreeMap<>();
         for (String target : targets) {
             gameConfigs.apply(target).forEach(config -> applied.putIfAbsent(config.order(), config));
         }
-        applied.values().forEach(config -> mixin.add(config.mod(), config.name(),
+        applied.values().forEach(config -> mixin.add(config.mod(), config.name(), false,
                 Objects.requireNonNullElse(config.compatibility(), FabricUtil.COMPATIBILITY_LATEST)));
 
         // One stamp per compilation: a class may still run code that calls the companion it had before.
         String stamp = Long.toHexString(System.nanoTime());
         Map<String, Outliner.Outline> outlines = new LinkedHashMap<>();
         Set<String> interfaces = new HashSet<>();
+        Map<String, List<String>> leftOut = new HashMap<>();
         for (String target : targets) {
             byte[] loaded = classes.apply(target);
             // A target the game does not have, such as a client class on a server, is left to Mixin's own rules.
-            byte[] source = loaded == null ? null : Objects.requireNonNullElse(sources.apply(target), loaded);
+            byte[] source = loaded == null ? null : inFileOrder(target, Objects.requireNonNullElse(sources.apply(target), loaded));
             byte[] mixed = source == null ? null : mixin.transform(target, source);
             if (mixed == null || mixed == source) {
                 continue;
             }
             // The class keeps the shape it was loaded with, which the game's own mixins may have changed.
-            Outliner.Outline outline = Outliner.outline(all, read(loaded), read(mixed),
-                    "net/ccbluex/modloader/generated/" + target.replace('.', '/') + "$" + stamp, initialized.test(target));
+            ClassNode mixedNode = read(mixed);
+            leftOut.put(target, MixinSession.leftOut(mixedNode));
+            Outliner.Outline outline = Outliner.outline(all, read(loaded), mixedNode,
+                    "net/ccbluex/modloader/generated/" + target.replace('.', '/') + "$" + stamp, mixin.isRelaxed(target),
+                    initialized.test(target));
             outlines.put(target, outline);
             interfaces.addAll(outline.interfaces());
         }
@@ -85,12 +92,32 @@ public final class Compiler implements MixinCompiler {
             outline.methods().forEach((method, moved) -> methods.put(method, moved.name));
             List<String> added = new ArrayList<>();
             outline.interfaces().forEach(name -> added.add(name.replace('/', '.')));
+            List<String> skipped = new ArrayList<>(outline.skipped());
+            skipped.addAll(leftOut.get(target));
             redefinitions.put(target, new Redefinition(write(outline.target()), outline.companion().name.replace('/', '.'),
-                    write(outline.companion()), added, methods, outline.initializer(), outline.fields(), outline.skipped()));
+                    write(outline.companion()), added, methods, outline.initializer(), outline.fields(), skipped, mixin.isRelaxed(target)));
         });
         rewriter = linked;
         session = mixin;
         return redefinitions;
+    }
+
+    /**
+     * The class with its methods in the order of its class file. The JVM hands a loaded class back in an order of
+     * its own, and a selector that several methods match, such as a name with a bridge method beside it, takes the
+     * first.
+     */
+    private byte[] inFileOrder(String target, byte[] bytes) {
+        ClassNode file = game.get(target.replace('.', '/'));
+        if (file == null) {
+            return bytes;
+        }
+        Map<String, Integer> order = new HashMap<>();
+        file.methods.forEach(method -> order.put(method.name + method.desc, order.size()));
+        ClassNode node = new ClassNode();
+        new ClassReader(bytes).accept(node, 0);
+        node.methods.sort(Comparator.comparingInt(method -> order.getOrDefault(method.name + method.desc, Integer.MAX_VALUE)));
+        return write(node);
     }
 
     @Override

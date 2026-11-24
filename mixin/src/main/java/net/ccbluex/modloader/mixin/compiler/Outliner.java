@@ -37,6 +37,9 @@ import org.objectweb.asm.tree.TableSwitchInsnNode;
 import org.objectweb.asm.tree.TryCatchBlockNode;
 import org.objectweb.asm.tree.TypeInsnNode;
 import org.objectweb.asm.tree.VarInsnNode;
+import org.objectweb.asm.tree.analysis.Analyzer;
+import org.objectweb.asm.tree.analysis.AnalyzerException;
+import org.objectweb.asm.tree.analysis.BasicVerifier;
 
 /**
  * Splits a mixed class into what the loaded class may become and a companion for the rest. A loaded class
@@ -84,9 +87,12 @@ final class Outliner {
      * @param classes class files of the game and the mods
      * @param baseline the class as the game defined it, read with expanded frames; its own Mixin may have changed it
      * @param mixed the same class after Mixin, read with expanded frames
+     * @param isRelaxed whether a mod outside its own framework mixes into the class: then a change of a method that
+     *                  a loaded class cannot take is left out, and the method stays as the game defined it
      * @throws UnsupportedOperationException when the mixins ask for what a loaded class cannot do
      */
-    static Outline outline(ClassFiles classes, ClassNode baseline, ClassNode mixed, String companionName, boolean isInitialized) {
+    static Outline outline(ClassFiles classes, ClassNode baseline, ClassNode mixed, String companionName, boolean isRelaxed,
+            boolean isInitialized) {
         Outliner outliner = new Outliner(classes, baseline, companionName);
         rename(baseline, mixed);
         outliner.initializeFields(mixed);
@@ -95,21 +101,34 @@ final class Outliner {
         List<MethodNode> methods = new ArrayList<>();
         for (MethodNode method : mixed.methods) {
             MethodNode before = unchanged.remove(method.name + method.desc);
-            if (method.name.equals("<clinit>") && (isInitialized || before == null)) {
-                outliner.initialize(before, method);
+            int moved = outliner.companion.methods.size();
+            try {
+                if (method.name.equals("<clinit>") && (isInitialized || before == null)) {
+                    outliner.initialize(before, method);
+                    if (before != null) {
+                        methods.add(before);
+                    }
+                } else if (before == null) {
+                    if (method.instructions.size() > 0) {
+                        outliner.add(method);
+                    }
+                } else if (code(before, 0, before.instructions.size()).equals(code(method, 0, method.instructions.size()))) {
+                    methods.add(before);
+                } else if (method.name.equals("<init>")) {
+                    methods.add(outliner.splitConstructor(before, method));
+                } else {
+                    methods.add(outliner.trampoline(before, outliner.move(method, method.name, method.instructions, method.tryCatchBlocks)));
+                }
+            } catch (UnsupportedOperationException e) {
+                if (!isRelaxed) {
+                    throw e;
+                }
+                // Each step refuses before it changes the method; what it moved already goes.
+                outliner.companion.methods.subList(moved, outliner.companion.methods.size()).clear();
+                outliner.skipped.add(e.getMessage());
                 if (before != null) {
                     methods.add(before);
                 }
-            } else if (before == null) {
-                if (method.instructions.size() > 0) {
-                    outliner.add(method);
-                }
-            } else if (code(before, 0, before.instructions.size()).equals(code(method, 0, method.instructions.size()))) {
-                methods.add(before);
-            } else if (method.name.equals("<init>")) {
-                methods.add(outliner.splitConstructor(before, method));
-            } else {
-                methods.add(outliner.trampoline(before, outliner.move(method, method.name, method.instructions, method.tryCatchBlocks)));
             }
         }
         methods.addAll(unchanged.values());
@@ -132,8 +151,8 @@ final class Outliner {
 
     /**
      * An object that existed before the mixins never ran the initializers of the fields they add, which Mixin put
-     * right after the super call of every constructor. Each one that only reads the object becomes a companion
-     * method from the object to the value, which Linker runs on the first read instead.
+     * into every constructor that calls super. Each one that only reads the object becomes a companion method from
+     * the object to the value, which Linker runs on the first read instead.
      */
     private void initializeFields(ClassNode mixed) {
         Set<String> existing = new HashSet<>();
@@ -144,7 +163,16 @@ final class Outliner {
                 continue;
             }
             AbstractInsnNode[] code = constructor.instructions.toArray();
+            // Mixin puts them after the last constructor call of the class or its superclass, which is later than the
+            // super call when the constructor makes another object of the class, as NeoForge's Pack does.
             int start = cut + 1;
+            for (int i = code.length - 1; i > cut; i--) {
+                if (code[i] instanceof MethodInsnNode call && call.getOpcode() == Opcodes.INVOKESPECIAL && call.name.equals("<init>")
+                        && (call.owner.equals(mixed.name) || call.owner.equals(mixed.superName))) {
+                    start = i + 1;
+                    break;
+                }
+            }
             for (int i = start; i < code.length; i++) {
                 // Each initializer is the object, its value and the put; the class's own come along in between.
                 if (code[i] instanceof FieldInsnNode put && put.getOpcode() == Opcodes.PUTFIELD && put.owner.equals(mixed.name)) {
@@ -203,6 +231,12 @@ final class Outliner {
         value.instructions.add(new InsnNode(Type.getType(field.desc).getOpcode(Opcodes.IRETURN)));
         value.maxStack = constructor.maxStack;
         value.maxLocals = 1;
+        try {
+            new Analyzer<>(new BasicVerifier()).analyze(companion.name, value);
+        } catch (AnalyzerException e) {
+            // The class's own code between two initializers came along, and it does not compute a value alone.
+            return null;
+        }
         // The frames of the constructor have the object under every value, which the method does not.
         value = recompute(value);
         companion.methods.add(value);
@@ -445,6 +479,14 @@ final class Outliner {
         appended.maxStack = after.maxStack;
         appended.maxLocals = after.maxLocals;
         copy(after, start, appended, baseline.name.replace('/', '.'));
+        for (AbstractInsnNode instruction : appended.instructions) {
+            // Only the class's own static initializer may set its final fields, and compiled code may have their values built in.
+            if (instruction instanceof FieldInsnNode put && put.getOpcode() == Opcodes.PUTSTATIC && put.owner.equals(baseline.name)
+                    && baseline.fields.stream().anyMatch(field -> field.name.equals(put.name) && (field.access & Opcodes.ACC_FINAL) != 0)) {
+                throw new UnsupportedOperationException("code a mixin appends to the static initializer of "
+                        + baseline.name.replace('/', '.') + " sets its final field " + put.name);
+            }
+        }
         // The frames Mixin computed carry the local variables of the part that stays behind.
         appended = recompute(appended);
         appended.name = "initialize$" + Integer.toHexString(code(appended, 0, appended.instructions.size()).hashCode());

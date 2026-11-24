@@ -7,6 +7,7 @@ import java.net.URLClassLoader;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import net.ccbluex.modloader.ModClassLoader;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FieldNode;
@@ -43,7 +44,8 @@ final class ClassFiles {
     ClassNode get(String name) {
         return classes.computeIfAbsent(name, _ -> {
             URL url = loader.getResource(name + ".class");
-            if (url == null || excluded != null && url.toString().equals(String.valueOf(excluded.findResource(name + ".class")))) {
+            URL own = excluded == null ? null : excluded.findResource(name + ".class");
+            if (url == null || own != null && (url.toString().equals(own.toString()) || ModClassLoader.isModFirst(name))) {
                 return Optional.empty();
             }
             // The class loader reads from the jar it keeps open; opening the URL would open the jar for every class.

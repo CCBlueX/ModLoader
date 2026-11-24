@@ -8,8 +8,10 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Proxy;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -32,14 +34,18 @@ public final class Linker {
     private static final MethodHandle IS_INSTANCE;
     private static final MethodHandle CAST;
     private static final MethodHandle FIND;
+    private static final MethodHandle FIND_STATIC;
     private static final MethodHandle CLASS_IS_INSTANCE;
+    private static final MethodHandle LAMBDA;
 
     static {
         try {
             IS_INSTANCE = LOOKUP.findVirtual(Linker.class, "isInstance", MethodType.methodType(boolean.class, Class.class, Object.class));
             CAST = LOOKUP.findVirtual(Linker.class, "cast", MethodType.methodType(Object.class, Class.class, Object.class));
             FIND = LOOKUP.findVirtual(Dispatch.class, "find", MethodType.methodType(MethodHandle.class, Object.class));
+            FIND_STATIC = LOOKUP.findVirtual(Dispatch.class, "find", MethodType.methodType(MethodHandle.class, Class.class));
             CLASS_IS_INSTANCE = LOOKUP.findVirtual(Class.class, "isInstance", MethodType.methodType(boolean.class, Object.class));
+            LAMBDA = LOOKUP.findStatic(Linker.class, "lambda", MethodType.methodType(Object.class, Class.class, String.class, MethodHandle.class, Object[].class));
         } catch (ReflectiveOperationException e) {
             throw new ExceptionInInitializerError(e);
         }
@@ -100,6 +106,9 @@ public final class Linker {
             Method method = Stream.of(companion.getMethods()).filter(each -> each.getName().equals(name)).findFirst()
                     .orElseThrow(() -> new NoSuchMethodException(subject + "." + name));
             handle = LOOKUP.unreflect(method);
+        } else if (kind.equals("lambda")) {
+            handle = MethodHandles.insertArguments(LAMBDA, 0, Class.forName(subject, false, loader), name,
+                    (MethodHandle) arguments[2]).asCollector(Object[].class, type.parameterCount());
         } else {
             Class<?> owner = Class.forName(subject, false, loader);
             handle = switch (kind) {
@@ -119,6 +128,24 @@ public final class Linker {
         return new ConstantCallSite(handle.asType(type));
     }
 
+    private static Object lambda(Class<?> functional, String name, MethodHandle implementation, Object[] captured) {
+        MethodHandle bound = MethodHandles.insertArguments(implementation, 0, captured);
+        return Proxy.newProxyInstance(functional.getClassLoader(), new Class<?>[] {functional}, (proxy, method, arguments) -> {
+            Object[] given = arguments == null ? new Object[0] : arguments;
+            if (method.getName().equals(name) && Modifier.isAbstract(method.getModifiers())) {
+                return bound.invokeWithArguments(given);
+            }
+            if (method.isDefault()) {
+                return InvocationHandler.invokeDefault(proxy, method, given);
+            }
+            return switch (method.getName()) {
+                case "equals" -> proxy == given[0];
+                case "hashCode" -> System.identityHashCode(proxy);
+                default -> functional.getName() + "@" + Integer.toHexString(System.identityHashCode(proxy));
+            };
+        });
+    }
+
     private static MethodType declared(Object[] arguments, int index, ClassLoader loader) {
         return arguments.length > index ? MethodType.fromMethodDescriptorString((String) arguments[index], loader) : null;
     }
@@ -133,9 +160,9 @@ public final class Linker {
     private MethodHandle field(String kind, Class<?> owner, String name, MethodType type) throws ReflectiveOperationException {
         boolean isStatic = kind.endsWith("static");
         boolean isRead = kind.startsWith("get");
-        Field field = findField(owner, name);
+        Class<?> fieldType = isRead ? type.returnType() : type.lastParameterType();
+        Field field = findField(owner, name, fieldType);
         if (field == null) {
-            Class<?> fieldType = isRead ? type.returnType() : type.lastParameterType();
             String key = owner.getName() + '.' + name;
             VirtualField virtual = fields.computeIfAbsent(key, _ -> new VirtualField(fieldType, generation.fields().get(key)));
             return isRead ? virtual.getter(isStatic) : virtual.setter(isStatic);
@@ -182,12 +209,13 @@ public final class Linker {
                 direct = MethodHandles.privateLookupIn(superCaller, LOOKUP).unreflectSpecial(method, superCaller);
             }
         }
-        Dispatch dispatch = new Dispatch(name + signature.toMethodDescriptorString(), type);
+        Dispatch dispatch = new Dispatch(name, signature, type);
+        if (isStatic && direct == null) {
+            // A static method a mixin added, such as an accessor; its owner is the class it was called on.
+            return MethodHandles.foldArguments(MethodHandles.exactInvoker(type), MethodHandles.insertArguments(FIND_STATIC, 0, dispatch, owner));
+        }
         if (isStatic || superCaller != null) {
             if (direct == null) {
-                if (isStatic) {
-                    throw new NoSuchMethodError(owner.getName() + "." + name + signature);
-                }
                 return dispatch.find(owner);
             }
             return direct;
@@ -212,12 +240,16 @@ public final class Linker {
         private record Cache(Generation generation, Map<Class<?>, MethodHandle> handles) {
         }
 
+        private final String name;
+        private final MethodType signature;
         private final String method;
         private final MethodType type;
         private volatile Cache cache = new Cache(null, Map.of());
 
-        Dispatch(String method, MethodType type) {
-            this.method = method;
+        Dispatch(String name, MethodType signature, MethodType type) {
+            this.name = name;
+            this.signature = signature;
+            this.method = name + signature.toMethodDescriptorString();
             this.type = type;
         }
 
@@ -235,6 +267,9 @@ public final class Linker {
             Generation from = current.generation();
             return current.handles().computeIfAbsent(declaring, receiverClass -> {
                 MethodHandle handle = added(from, receiverClass);
+                if (handle == null) {
+                    handle = own(receiverClass);
+                }
                 if (handle == null) {
                     throw new AbstractMethodError(receiverClass.getName() + "." + method);
                 }
@@ -257,6 +292,24 @@ public final class Linker {
                 }
             }
             return handle;
+        }
+
+        /**
+         * The method the class has itself, as the game's framework wrote it, which the mod's call reaches as the
+         * JVM's would when the class implemented the interface. A mixin left out its accessor for that method.
+         */
+        private MethodHandle own(Class<?> declaring) {
+            Method own = findMethod(declaring, name, signature);
+            if (own == null || Modifier.isAbstract(own.getModifiers())) {
+                return null;
+            }
+            open(own.getDeclaringClass());
+            own.setAccessible(true);
+            try {
+                return LOOKUP.unreflect(own);
+            } catch (IllegalAccessException e) {
+                throw new IllegalStateException(e);
+            }
         }
     }
 
@@ -284,22 +337,27 @@ public final class Linker {
         return object;
     }
 
-    /** As the JVM looks a field up: the class, its interfaces, its superclass. */
-    private static Field findField(Class<?> owner, String name) {
+    /**
+     * As the JVM looks a field up: by name and type, in the class, its interfaces, its superclass. A mixin may add a
+     * field of a name the class has with another type. The type may be a superclass the compiler put in place of
+     * the field's.
+     */
+    private static Field findField(Class<?> owner, String name, Class<?> type) {
         if (owner == null) {
             return null;
         }
-        try {
-            return owner.getDeclaredField(name);
-        } catch (NoSuchFieldException e) {
-            for (Class<?> implemented : owner.getInterfaces()) {
-                Field field = findField(implemented, name);
-                if (field != null) {
-                    return field;
-                }
+        for (Field field : owner.getDeclaredFields()) {
+            if (field.getName().equals(name) && type.isAssignableFrom(field.getType())) {
+                return field;
             }
-            return findField(owner.getSuperclass(), name);
         }
+        for (Class<?> implemented : owner.getInterfaces()) {
+            Field field = findField(implemented, name, type);
+            if (field != null) {
+                return field;
+            }
+        }
+        return findField(owner.getSuperclass(), name, type);
     }
 
     private static Method findMethod(Class<?> owner, String name, MethodType signature) {

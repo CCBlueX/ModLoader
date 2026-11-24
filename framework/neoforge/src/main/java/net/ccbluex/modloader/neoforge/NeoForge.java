@@ -10,7 +10,10 @@ import net.ccbluex.modloader.ModFile;
 import net.ccbluex.modloader.TomlModFile;
 import net.neoforged.fml.ModList;
 
-/** @agent claude-fable-5-2 */
+/**
+ * @agent claude-fable-5-2
+ * @agent claude-opus-5-5
+ */
 public final class NeoForge implements Framework {
 
     @Override
@@ -26,6 +29,17 @@ public final class NeoForge implements Framework {
     @Override
     public boolean isLoaded(String id) {
         return ModList.get().isLoaded(id);
+    }
+
+    /** NeoForge draws the hotbar and what goes with it as layers, and screens through its hooks. */
+    @Override
+    public List<Replacement> replacements() {
+        return List.of(
+                new Replacement("net/minecraft/client/gui/Hud", null, "extractHotbarAndDecorations", "extractHotbar"),
+                new Replacement("net/minecraft/client/gui/Gui", "extractRenderState",
+                        "Lnet/minecraft/client/gui/screens/Screen;extractRenderStateWithTooltipAndSubtitles(Lnet/minecraft/client/gui/GuiGraphicsExtractor;IIF)V",
+                        "Lnet/neoforged/neoforge/client/ClientHooks;extractScreen(Lnet/minecraft/client/gui/screens/Screen;Ljava/util/Stack;"
+                                + "Lnet/minecraft/client/gui/GuiGraphicsExtractor;IIF)V"));
     }
 
     @Override

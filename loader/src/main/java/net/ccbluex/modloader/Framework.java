@@ -1,7 +1,9 @@
 package net.ccbluex.modloader;
 
 import java.io.IOException;
+import java.lang.instrument.Instrumentation;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.function.UnaryOperator;
 
 /**
@@ -15,8 +17,16 @@ public interface Framework {
 
     String name();
 
-    /** Whether the running game has this framework. */
+    /** Whether the running game has this framework, also when ModLoader brought it in. */
     boolean isPresent();
+
+    /**
+     * Whether the game started with this framework. A framework brought in later runs its mods on classes it never
+     * prepared for them.
+     */
+    default boolean hasStartedGame() {
+        return isPresent();
+    }
 
     /** Only called when {@link #isPresent} holds. */
     boolean isLoaded(String id);
@@ -38,6 +48,32 @@ public interface Framework {
      * a parent an earlier loader put there gives way to the new one. Only called when {@link #isPresent} holds.
      */
     default void share(UnaryOperator<ClassLoader> parent) {
+    }
+
+    /**
+     * Brings the framework into the game when {@code mods}, built for it, need it, and returns the jars of the mods
+     * that come with it, such as its API, to load before them. Null when they do not need it or it cannot come in.
+     * Only called when {@link #hasStartedGame} does not hold; a framework brought in earlier stays and only adds
+     * what these mods need on top.
+     */
+    default List<Path> bringIn(List<ModFile> mods, Instrumentation instrumentation) throws IOException {
+        return null;
+    }
+
+    /**
+     * What the framework replaced in the game, for the mixins of mods outside it, which name what it replaced. Only
+     * called when {@link #isPresent} holds.
+     */
+    default List<Replacement> replacements() {
+        return List.of();
+    }
+
+    /**
+     * With {@code in} null, the method {@code replaced} of the class {@code owner}, which the method {@code by} took
+     * the place of; else the call {@code replaced} in its method {@code in}, which the call {@code by} took the place
+     * of. Classes by internal name, calls as Mixin's INVOKE targets.
+     */
+    record Replacement(String owner, String in, String replaced, String by) {
     }
 
     /** Whether the game or the framework it runs has this class. */
