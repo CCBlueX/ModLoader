@@ -3,6 +3,8 @@ name: Build
 on:
   push:
     branches: [main]
+    # v0.1.0 releases 0.1.0
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -36,6 +38,10 @@ jobs:
           distribution: temurin
           java-version: 25
       - uses: gradle/actions/setup-gradle@v6
+      - name: Take the version from the tag
+        if: github.ref_type == 'tag'
+        # Every Gradle step below reads it as -PmodloaderVersion.
+        run: echo "ORG_GRADLE_PROJECT_modloaderVersion=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
       - name: Build
         # The tests attach the command line tool to a JVM, which every system does its own way.
         run: ./gradlew build
@@ -59,16 +65,18 @@ jobs:
         with:
           name: ${{ matrix.program }}
           path: release/*
-      - name: Publish API to maven.ccbluex.net
-        if: runner.os == 'Linux' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Publish to maven.ccbluex.net
+        if: runner.os == 'Linux' && github.event_name == 'push'
         env:
           ORG_GRADLE_PROJECT_mavenUsername: ${{ secrets.MAVEN_TOKEN_NAME }}
           ORG_GRADLE_PROJECT_mavenPassword: ${{ secrets.MAVEN_TOKEN_SECRET }}
-        run: ./gradlew :api:publish -PmavenUrl=https://maven.ccbluex.net/snapshots
+        run: >-
+          ./gradlew publish
+          -PmavenUrl=https://maven.ccbluex.net/${{ github.ref_type == 'tag' && 'releases' || 'snapshots' }}
 
   release:
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -76,15 +84,22 @@ jobs:
         with:
           path: release
           merge-multiple: true
-      - name: Publish snapshot release
+      - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          # Recreated, as an existing release cannot move its tag to the new commit.
-          gh release delete snapshot --cleanup-tag --yes || true
-          gh release create snapshot release/* \
-            --title "Snapshot" \
-            --notes "Automatic build of \`${GITHUB_SHA::7}\` from \`main\`." \
-            --prerelease \
-            --target "$GITHUB_SHA"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            gh release create "$GITHUB_REF_NAME" release/* \
+              --title "${GITHUB_REF_NAME#v}" \
+              --generate-notes \
+              --verify-tag
+          else
+            # Recreated, as an existing release cannot move its tag to the new commit.
+            gh release delete snapshot --cleanup-tag --yes || true
+            gh release create snapshot release/* \
+              --title "Snapshot" \
+              --notes "Automatic build of \`${GITHUB_SHA::7}\` from \`main\`." \
+              --prerelease \
+              --target "$GITHUB_SHA"
+          fi

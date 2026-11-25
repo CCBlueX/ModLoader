@@ -52,13 +52,21 @@ public interface Framework {
     }
 
     /**
-     * Brings the framework into the game when {@code mods}, built for it, need it, and returns the jars of the mods
-     * that come with it, such as its API, to load before them. Null when they do not need it or it cannot come in.
-     * Only called when {@link #hasStartedGame} does not hold; a framework brought in earlier stays and only adds
-     * what these mods need on top.
+     * Brings the framework into the game when {@code mods}, the mods of one load that are built for it, need it,
+     * and returns the jars of the mods that come with it, such as its API, to load before them. Null when they do
+     * not need it or it cannot come in. Only called when {@link #hasStartedGame} does not hold; a framework brought
+     * in earlier stays and only adds what these mods need on top.
      */
     default @Nullable List<Path> bringIn(List<ModFile> mods, Instrumentation instrumentation) throws IOException {
         return null;
+    }
+
+    /**
+     * Whether {@link #bringIn} supplies the mod with this id itself, in the version that fits the game, so a jar of
+     * it in a load is left out. Only asked when {@link #hasStartedGame} does not hold.
+     */
+    default boolean bringsIn(String id) {
+        return false;
     }
 
     /**

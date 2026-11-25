@@ -43,19 +43,42 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
     private static final Gson GSON = new Gson();
 
     /**
-     * {@code item} is the jar of a load and the mod id of an unload.
+     * {@code items} and {@code properties} are the jars and the system properties of a load, {@code item} is the mod
+     * id of an unload.
      *
      * @agent claude-fable-5-2
      */
-    private record Request(String command, @Nullable String item) {
+    private record Request(String command, @Nullable String item, @Nullable List<String> items,
+            @Nullable Map<String, String> properties) {
     }
 
     /**
-     * The answer to {@code load}. Not new when the game or an earlier load already had the mod.
+     * The answer to {@code game}. {@code frameworks} also names the ones ModLoader brought in.
      *
      * @agent claude-fable-5-2
      */
-    private record Loaded(String id, String framework, boolean isNew, List<String> notes) {
+    private record Running(String version, String directory, List<String> frameworks, boolean isClient) {
+    }
+
+    /**
+     * A mod and the jar it came from.
+     *
+     * @agent claude-fable-5-2
+     */
+    private record Entry(String id, String framework, String path) {
+
+        Entry(ModFile file) {
+            this(file.id, file.framework.name(), file.path.toString());
+        }
+    }
+
+    /**
+     * The answer to {@code load}: of the given jars, {@code mods} has the ones loaded and {@code present} the ones
+     * whose mod the game, an earlier load or an earlier jar of this load already had.
+     *
+     * @agent claude-fable-5-2
+     */
+    private record Loaded(List<Entry> mods, List<Entry> present, List<String> notes) {
     }
 
     /** @agent claude-fable-5-2 */
@@ -64,10 +87,6 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
 
     /** @agent claude-fable-5-2 */
     private record LoadedMods(List<Entry> mods) {
-
-        /** @agent claude-fable-5-2 */
-        private record Entry(String id, String framework, String path) {
-        }
     }
 
     /** @agent claude-fable-5-2 */
@@ -100,11 +119,12 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
         Object answer;
         try {
             answer = switch (request.command()) {
-                case "load" -> load(Path.of(Objects.requireNonNull(request.item(), "load needs a jar")));
+                case "game" -> new Running(Game.version(), Game.directory().toString(),
+                        frameworks.stream().filter(Framework::isPresent).map(Framework::name).toList(),
+                        Game.isClient());
+                case "load" -> load(Objects.requireNonNull(request.items(), "load needs jars"), request.properties());
                 case "unload" -> unload(Objects.requireNonNull(request.item(), "unload needs a mod id"));
-                case "list" -> new LoadedMods(mods.values().stream()
-                        .map(mod -> new LoadedMods.Entry(mod.id(), mod.file.framework.name(), mod.file.path.toString()))
-                        .toList());
+                case "list" -> new LoadedMods(mods.values().stream().map(mod -> new Entry(mod.file)).toList());
                 default -> throw new IllegalArgumentException("unknown command " + request.command());
             };
         } catch (Exception | LinkageError e) {
@@ -129,21 +149,45 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
         }
     }
 
-    private Loaded load(Path jar) throws Exception {
-        ModFile file = read(jar);
-        if (file == null) {
-            throw new IllegalArgumentException("not a mod of " + frameworks.stream().map(Framework::name).toList());
+    private Loaded load(List<String> items, @Nullable Map<String, String> properties) throws Exception {
+        // What -D is at launch: set before anything of the mods runs.
+        if (properties != null) {
+            properties.forEach(System::setProperty);
         }
-        if (isLoaded(file.id)) {
-            return new Loaded(file.id, file.framework.name(), false, List.of());
-        }
-        // A jar and the mods bundled in it load together, as at startup: they may depend on each other.
-        List<Mod> loaded = new ArrayList<>();
+        List<ModFile> files = new ArrayList<>();
+        List<Entry> present = new ArrayList<>();
         List<String> notes = new ArrayList<>();
+        for (String item : items) {
+            ModFile file = readMod(Path.of(item));
+            if (isLoaded(file.id)) {
+                present.add(new Entry(file));
+            } else if (!file.framework.hasStartedGame() && file.framework.bringsIn(file.id)) {
+                notes.add("left out: " + file.path.getFileName() + ", as " + file.framework.name() + " brings "
+                        + file.id + " in itself");
+            } else {
+                files.add(file);
+            }
+        }
+        if (files.isEmpty()) {
+            return new Loaded(List.of(), present, notes);
+        }
+        // The jars and the mods bundled in them load together, as at startup: they may depend on each other.
+        List<Mod> loaded = new ArrayList<>();
+        List<Mod> given = new ArrayList<>();
         try {
-            open(file, loaded);
-            if (!file.framework.hasStartedGame()) {
-                bringIn(file.framework, loaded, notes);
+            for (ModFile file : files) {
+                // An earlier jar of the load may be the same mod, or bundle it.
+                if (loaded.stream().anyMatch(mod -> mod.id().equals(file.id))) {
+                    present.add(new Entry(file));
+                } else {
+                    given.add(open(file, loaded));
+                }
+            }
+            for (Framework framework : frameworks) {
+                if (!framework.hasStartedGame()
+                        && loaded.stream().anyMatch(mod -> mod.file.framework == framework)) {
+                    bringIn(framework, loaded, notes);
+                }
             }
             checkDependencies(loaded);
             loaded.forEach(mod -> mods.put(mod.id(), mod));
@@ -158,7 +202,27 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
             revert(loaded);
             throw e;
         }
-        return new Loaded(file.id, file.framework.name(), true, notes);
+        List<Entry> entries = new ArrayList<>();
+        for (Mod mod : given) {
+            // A given jar is missing from the load when a framework brought the same mod in.
+            (loaded.contains(mod) ? entries : present).add(new Entry(mod.file));
+        }
+        return new Loaded(entries, present, notes);
+    }
+
+    /** A jar given to {@code load}, which has to be a mod. */
+    private ModFile readMod(Path jar) throws IOException {
+        ModFile file;
+        try {
+            file = read(jar);
+        } catch (IOException e) {
+            throw new IOException("cannot read " + jar + ": " + e, e);
+        }
+        if (file == null) {
+            throw new IllegalArgumentException(
+                    jar + " is not a mod of " + frameworks.stream().map(Framework::name).toList());
+        }
+        return file;
     }
 
     private void checkDependencies(List<Mod> loaded) {
@@ -171,7 +235,10 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
         }
     }
 
-    /** On the game thread. As at the game's start, nothing of the mods runs before they have started. */
+    /**
+     * On the game thread. As at the game's start, nothing of the mods runs before they have started, and every mod
+     * has run its framework entrypoints before the first RuntimeMod.
+     */
     private void start(List<Mod> loaded, MixinManager.Compilation compilation, List<String> notes) {
         applyMixins(compilation).forEach(skipped -> notes.add("left out: " + skipped));
         Thread thread = Thread.currentThread();
@@ -180,7 +247,11 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
             for (Mod mod : loaded) {
                 // Libraries look their services up through the thread's class loader, which is the game's.
                 thread.setContextClassLoader(mod.classLoader);
-                mod.start().forEach(skipped -> notes.add("left out: " + skipped));
+                mod.startInFramework().forEach(skipped -> notes.add("left out: " + skipped));
+            }
+            for (Mod mod : loaded) {
+                thread.setContextClassLoader(mod.classLoader);
+                mod.start();
             }
         } catch (ReflectiveOperationException e) {
             throw new CompletionException(e);
@@ -223,10 +294,15 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
         return mod;
     }
 
-    /** Puts the mods that come with the framework at the front of {@code loaded}, when it comes in for them. */
+    /**
+     * Puts the mods that come with the framework at the front of {@code loaded}, when it comes in for its mods
+     * there. A mod of the load that the framework brings as well gives way to the framework's.
+     */
     private void bringIn(Framework framework, List<Mod> loaded, List<String> notes) throws IOException {
         boolean wasPresent = framework.isPresent();
-        List<Path> jars = framework.bringIn(loaded.stream().map(mod -> mod.file).toList(), instrumentation);
+        List<Path> jars = framework.bringIn(
+                loaded.stream().map(mod -> mod.file).filter(file -> file.framework == framework).toList(),
+                instrumentation);
         if (jars == null) {
             return;
         }
@@ -236,6 +312,13 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
             ModFile file = read(jar);
             if (file != null && !isLoaded(file.id)) {
                 ids.add(open(file, first).id());
+            }
+        }
+        for (Mod mod : List.copyOf(loaded)) {
+            if (first.stream().anyMatch(other -> other.id().equals(mod.id()))) {
+                loaded.remove(mod);
+                loaded.forEach(other -> other.bundled.remove(mod));
+                mod.close();
             }
         }
         loaded.addAll(0, first);
@@ -393,7 +476,7 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
     private static void runOnGameThread(Runnable task) {
         Object minecraft = null;
         Object server = null;
-        if (Framework.hasClass("net.minecraft.client.Minecraft")) {
+        if (Game.isClient()) {
             try {
                 ClassLoader game = ModLoader.class.getClassLoader();
                 Class<?> type = Class.forName("net.minecraft.client.Minecraft", false, game);

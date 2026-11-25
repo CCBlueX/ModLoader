@@ -1,7 +1,7 @@
+use std::env;
 use std::error::Error;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::{env, fmt};
 
 use clap::{Parser, Subcommand};
 use modloader::{Jvm, ModLoader};
@@ -21,8 +21,11 @@ struct Arguments {
 /// @agent claude-fable-5-2
 #[derive(Subcommand)]
 enum Command {
-    /// Load mods into the running game
+    /// Load mods into the running game, together
     Load {
+        /// System property to set in the game before the mods start; may repeat
+        #[arg(short = 'D', value_name = "KEY=VALUE", value_parser = property)]
+        properties: Vec<(String, String)>,
         #[arg(required = true)]
         jars: Vec<PathBuf>,
     },
@@ -33,6 +36,14 @@ enum Command {
     },
     /// Show the mods loaded this way
     List,
+    /// Show the game's version, mod frameworks and directory
+    Game,
+}
+
+/// @agent claude-fable-5-2
+fn property(argument: &str) -> Result<(String, String), String> {
+    let (key, value) = argument.split_once('=').ok_or("expected KEY=VALUE")?;
+    Ok((key.to_string(), value.to_string()))
 }
 
 /// @agent claude-fable-5-2
@@ -47,7 +58,7 @@ fn main() -> ExitCode {
     }
 }
 
-/// Whether every item went through. One that did not has its reason printed.
+/// Whether every unload went through; one that did not has its reason printed. Any other failure is the error.
 ///
 /// @agent claude-fable-5-2
 fn run(arguments: Arguments) -> Result<bool, Box<dyn Error>> {
@@ -65,37 +76,36 @@ fn run(arguments: Arguments) -> Result<bool, Box<dyn Error>> {
     };
     let loader = ModLoader::new(pid, agent);
     let mut is_done = true;
-    let mut report = |item: &dyn fmt::Display, result: Result<(String, Vec<String>), Box<dyn Error>>| match result {
-        Ok((line, notes)) => {
-            println!("{line}");
-            notes.iter().for_each(|note| println!("  {note}"));
-        }
-        Err(error) => {
-            println!("error: {item}: {error}");
-            is_done = false;
-        }
-    };
     match arguments.command {
-        Command::Load { jars } => {
-            for jar in jars {
-                let loaded = if jar.is_file() {
-                    loader.load(&jar).map_err(Into::into)
-                } else {
-                    Err("no such file".into())
-                };
-                report(
-                    &jar.display(),
-                    loaded.map(|loaded| match loaded.is_new {
-                        true => (format!("loaded {} ({})", loaded.id, loaded.framework), loaded.notes),
-                        false => (format!("{} is already loaded", loaded.id), loaded.notes),
-                    }),
-                );
+        Command::Load { properties, jars } => {
+            if let Some(jar) = jars.iter().find(|jar| !jar.is_file()) {
+                return Err(format!("{}: no such file", jar.display()).into());
             }
+            let properties: Vec<(&str, &str)> = properties
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str()))
+                .collect();
+            let loaded = loader.load(&jars, &properties)?;
+            for present in &loaded.present {
+                println!("{} is already loaded", present.id);
+            }
+            for loaded in &loaded.mods {
+                println!("loaded {} ({})", loaded.id, loaded.framework);
+            }
+            loaded.notes.iter().for_each(|note| println!("  {note}"));
         }
         Command::Unload { ids } => {
             for id in ids {
-                let unloaded = loader.unload(&id).map_err(Into::into);
-                report(&id, unloaded.map(|notes| (format!("unloaded {id}"), notes)));
+                match loader.unload(&id) {
+                    Ok(notes) => {
+                        println!("unloaded {id}");
+                        notes.iter().for_each(|note| println!("  {note}"));
+                    }
+                    Err(error) => {
+                        println!("error: {id}: {error}");
+                        is_done = false;
+                    }
+                }
             }
         }
         Command::List => {
@@ -106,6 +116,16 @@ fn run(arguments: Arguments) -> Result<bool, Box<dyn Error>> {
             for loaded in mods {
                 println!("{} ({}) {}", loaded.id, loaded.framework, loaded.path.display());
             }
+        }
+        Command::Game => {
+            let running = loader.game()?;
+            println!("{}", running.version);
+            if running.frameworks.is_empty() {
+                println!("no mod framework");
+            } else {
+                println!("{}", running.frameworks.join(", "));
+            }
+            println!("{}", running.directory.display());
         }
     }
     Ok(is_done)

@@ -34,12 +34,15 @@ final class Mod implements LoadedMod {
         return file.id;
     }
 
-    /** @return what the framework's entrypoints had to leave out, for the person loading the mod */
-    List<String> start() throws ReflectiveOperationException {
+    /**
+     * Runs the framework's entrypoints, before any class of the mod loads: a framework may still turn the mod into
+     * a module, which no loaded class allows.
+     *
+     * @return what the entrypoints had to leave out, for the person loading the mod
+     */
+    List<String> startInFramework() throws ReflectiveOperationException {
         List<String> leftOut = new ArrayList<>();
-        boolean hasFramework = file.framework.isPresent();
-        if (hasFramework) {
-            // First, as a framework may still turn the mod into a module, which no loaded class allows.
+        if (file.framework.isPresent()) {
             isStartedByFramework = file.hasEntrypoints();
             try {
                 file.start(classLoader);
@@ -55,16 +58,21 @@ final class Mod implements LoadedMod {
                 }
             }
         }
+        return leftOut;
+    }
+
+    /** Runs the mod's RuntimeMods, once the framework entrypoints of every mod of the load have run. */
+    void start() {
         List<ServiceLoader.Provider<RuntimeMod>> providers = ServiceLoader.load(RuntimeMod.class, classLoader).stream()
                 .filter(provider -> provider.type().getClassLoader() == classLoader)
                 .toList();
-        if (!hasFramework && file.hasEntrypoints() && providers.isEmpty() && file.mixinConfigs().isEmpty()) {
+        if (!file.framework.isPresent() && file.hasEntrypoints() && providers.isEmpty()
+                && file.mixinConfigs().isEmpty()) {
             throw new IllegalStateException("built for " + file.framework.name()
                     + ", which this game does not have, and has no RuntimeMod entrypoint or mixins");
         }
         entrypoints = providers.stream().map(ServiceLoader.Provider::get).toList();
         entrypoints.forEach(entrypoint -> entrypoint.load(this));
-        return leftOut;
     }
 
     /** What a framework entrypoint registered with the game stays there, so only a RuntimeMod can undo it. */

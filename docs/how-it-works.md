@@ -1,17 +1,17 @@
 # How ModLoader works
 
-What happens in the game when a mod is loaded, which parts of a mod run in which game, and where the limits are.
+What happens in the game when mods are loaded, which parts of a mod run in which game, and where the limits are.
 How to use it is in the [README](../README.md).
 
-## Loading a mod
+## Loading mods
 
 ```mermaid
 flowchart LR
-    cli["launcher, or<br/>modloader load mod.jar"] -- attach --> agent
+    cli["launcher, or<br/>modloader load a.jar b.jar"] -- attach --> agent
     subgraph game ["running Minecraft"]
         agent --> loader
         loader -- "is the id loaded?" --> framework["Fabric, Quilt, NeoForge, Forge<br/>or none"]
-        loader -- "own class loader" --> mod["mod.jar"]
+        loader -- "own class loader" --> mod["a.jar, b.jar"]
         framework -- entrypoints --> mod
         loader -- "mixin configs" --> mixin["own Mixin"]
         mixin -- "redefine" --> classes["loaded game classes"]
@@ -20,8 +20,19 @@ flowchart LR
     end
 ```
 
-A mod loads once: when the game's framework or an earlier `load` already has its id, `load` says so and changes
-nothing. Mods bundled in a jar load and unload together with it, unless the game already has them.
+One `load` takes one jar or many and treats them as the mods of one game start:
+
+1. The system properties given with it are set before anything of the mods runs: what `-D` is at launch.
+2. Every jar is read. A jar that is a mod of no framework refuses the whole load. A jar whose mod id the game's
+   framework, an earlier `load` or an earlier jar of this load already has is not loaded, and `load` says so.
+3. The mods bundled in the jars join them, unless the game already has them. Dependencies are checked across all of
+   them, so the jars may depend on each other, in any order.
+4. The mixins of all of them are compiled together and applied in one step on the game thread. There, in the order
+   the jars were given, every mod runs its framework entrypoints, and after the last of them every mod runs its
+   `RuntimeMod`: it finds the other mods of the load started.
+5. A failure anywhere takes the whole load out of the game again.
+
+Mods bundled in a jar unload together with it.
 
 ## What runs
 
@@ -44,10 +55,14 @@ libraries from Fabric's servers, and Fabric API and Fabric Language Kotlin for t
 Modrinth, checks each against the SHA-512 its server gives, and keeps them in `.modloader/<version>/` of the game
 directory. Later loads take them from there without asking the network; delete the directory to get newer ones.
 Fabric Loader joins the game's class path and runs without Knot. Of Fabric API only the modules come in that the
-mod names in its `depends` or whose classes its jar names, in its code or in a string, with what they depend on.
-They and Fabric Language Kotlin load before the mod like any other mod, and stay with Fabric Loader until the game
-exits. What Fabric API only does at the game's start, such as registering its content or the events of the start,
-does not happen.
+mods of the load name in their `depends` or whose classes their jars name, in their code or in a string, with what
+they depend on. They and Fabric Language Kotlin load before the mods like any other mod, and stay with Fabric Loader
+until the game exits. What Fabric API only does at the game's start, such as registering its content or the events
+of the start, does not happen.
+
+A jar of Fabric Loader, Fabric API, one of its modules or Fabric Language Kotlin that is given to a `load` in such a
+game is left out, and `load` says so: all of Fabric API would come in with it, and Fabric brings what fits the game
+itself. In a game Fabric started, these jars load like any mod.
 
 ## Mixins
 

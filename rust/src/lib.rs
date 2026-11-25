@@ -4,23 +4,32 @@
 //! is started: the game's own JVM runs the agent in `modloader.jar`. Every call blocks until the game has answered.
 //!
 //! ```no_run
-//! # let game = std::process::Command::new("java").spawn()?;
-//! let loader = modloader::ModLoader::new(game.id(), "modloader.jar");
-//! let loaded = loader.load("mods/mymod.jar".as_ref())?;
-//! println!("{} runs on {}", loaded.id, loaded.framework);
-//! loader.unload(&loaded.id)?;
+//! # let process = std::process::Command::new("java").spawn()?;
+//! let loader = modloader::ModLoader::new(process.id(), "modloader.jar");
+//! let game = loader.game()?;
+//! println!("Minecraft {} in {}", game.version, game.directory.display());
+//! // One load: the mods start together, as at the game's start, with the property set before any of them runs.
+//! let loaded = loader.load(&["mods/library.jar", "mods/mymod.jar"], &[("mymod.folder", "/data/mymod")])?;
+//! for loaded in &loaded.mods {
+//!     println!("{} runs on {}", loaded.id, loaded.framework);
+//! }
+//! loader.unload("mymod")?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
 mod attach;
 
+use std::collections::HashMap;
 use std::path::{self, Path, PathBuf};
 use std::{fmt, fs, io};
 
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+
+/// The crate's version; an agent jar fits when its major.minor is the same.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Why a request did not go through.
 ///
@@ -44,27 +53,41 @@ pub struct ModLoader {
     agent: PathBuf,
 }
 
-/// What [`ModLoader::load`] did.
+/// The game a [`ModLoader`] talks to.
 ///
 /// @agent claude-fable-5-2
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct Game {
+    /// Minecraft's own version, such as `26.3`.
+    pub version: String,
+    /// The game directory; of a dedicated server, its working directory.
+    pub directory: PathBuf,
+    /// `Fabric`, `Quilt`, `NeoForge` or `Forge`, also when ModLoader brought it in. Empty in a game without any.
+    pub frameworks: Vec<String>,
+    pub is_client: bool,
+}
+
+/// What [`ModLoader::load`] did with the jars it was given.
+///
+/// @agent claude-fable-5-2
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Loaded {
-    pub id: String,
-    /// `Fabric`, `Quilt`, `NeoForge` or `Forge`.
-    pub framework: String,
-    /// False when the game or an earlier load already had the mod.
-    pub is_new: bool,
-    /// What the user should know: mixins left out, a framework brought in.
+    /// The jars that were loaded. Mods bundled in them and mods a framework brought in are not listed.
+    pub mods: Vec<Mod>,
+    /// The jars that were not needed: the game, an earlier load or an earlier jar of this load had the mod.
+    pub present: Vec<Mod>,
+    /// What the user should know: jars and mixins left out, a framework brought in.
     pub notes: Vec<String>,
 }
 
-/// A mod loaded through ModLoader.
+/// A mod and the jar it came from.
 ///
 /// @agent claude-fable-5-2
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Mod {
     pub id: String,
+    /// `Fabric`, `Quilt`, `NeoForge` or `Forge`.
     pub framework: String,
     pub path: PathBuf,
 }
@@ -78,9 +101,20 @@ impl ModLoader {
         }
     }
 
-    pub fn load(&self, jar: &Path) -> Result<Loaded, Error> {
-        // The game opens the jar, from its own working directory.
-        self.request("load", Some(utf8(&path::absolute(jar)?)?))
+    pub fn game(&self) -> Result<Game, Error> {
+        self.request(json!({ "command": "game" }))
+    }
+
+    /// Loads the jars together, as the mods of one game start, and sets `properties` as system properties of the
+    /// game's JVM before anything of them runs. A jar that is no mod refuses the whole load.
+    pub fn load<P: AsRef<Path>>(&self, jars: &[P], properties: &[(&str, &str)]) -> Result<Loaded, Error> {
+        // The game opens the jars, from its own working directory.
+        let items = jars
+            .iter()
+            .map(|jar| path::absolute(jar).and_then(|jar| utf8(&jar).map(str::to_owned)))
+            .collect::<io::Result<Vec<String>>>()?;
+        let properties: HashMap<&str, &str> = properties.iter().copied().collect();
+        self.request(json!({ "command": "load", "items": items, "properties": properties }))
     }
 
     /// Unloads a mod loaded through ModLoader and returns what the user should know about it.
@@ -89,7 +123,8 @@ impl ModLoader {
         struct Unloaded {
             notes: Vec<String>,
         }
-        Ok(self.request::<Unloaded>("unload", Some(id))?.notes)
+        let unloaded: Unloaded = self.request(json!({ "command": "unload", "item": id }))?;
+        Ok(unloaded.notes)
     }
 
     /// The mods loaded through ModLoader, not those the game started with.
@@ -98,21 +133,18 @@ impl ModLoader {
         struct LoadedMods {
             mods: Vec<Mod>,
         }
-        Ok(self.request::<LoadedMods>("list", None)?.mods)
+        let loaded: LoadedMods = self.request(json!({ "command": "list" }))?;
+        Ok(loaded.mods)
     }
 
-    fn request<T: DeserializeOwned>(&self, command: &str, item: Option<&str>) -> Result<T, Error> {
+    fn request<T: DeserializeOwned>(&self, request: Value) -> Result<T, Error> {
         let answer = tempfile::Builder::new()
             .prefix("modloader-")
             .tempfile()?
             .into_temp_path();
         let agent = utf8(&self.agent)?;
         // Read by Agent.agentmain: where the answer goes, its own jar, then the loader's request.
-        let options = format!(
-            "{}\n{agent}\n{}",
-            utf8(&answer)?,
-            json!({ "command": command, "item": item })
-        );
+        let options = format!("{}\n{agent}\n{request}", utf8(&answer)?);
         attach::load_agent(self.pid, agent, &options)?;
         parse(&fs::read_to_string(&answer)?)
     }
@@ -189,6 +221,12 @@ impl Jvm {
             .iter()
             .any(|name| command.contains(name))
     }
+
+    /// The value after `name` on the command line, such as `--gameDir` or `--version`.
+    pub fn argument(&self, name: &str) -> Option<&str> {
+        let at = self.command.iter().position(|argument| argument == name)?;
+        self.command.get(at + 1).map(String::as_str)
+    }
 }
 
 /// The process id and the command line without its class paths, which run over many lines.
@@ -205,7 +243,9 @@ impl fmt::Display for Jvm {
 /// @agent claude-fable-5-2
 #[cfg(test)]
 mod tests {
-    use super::{Error, Jvm, Loaded, parse};
+    use std::path::Path;
+
+    use super::{Error, Game, Jvm, Loaded, parse};
 
     fn jvm(command: &[&str]) -> Jvm {
         Jvm {
@@ -216,10 +256,14 @@ mod tests {
 
     #[test]
     fn tells_refusals_from_answers() {
-        let loaded: Loaded =
-            parse(r#"{"id":"example","framework":"Fabric","isNew":true,"notes":["left out: a"]}"#).unwrap();
-        assert!(loaded.is_new);
-        assert_eq!(vec!["left out: a"], loaded.notes);
+        let loaded: Loaded = parse(
+            r#"{"mods":[{"id":"a","framework":"Fabric","path":"/mods/a.jar"}],"present":[],"notes":["left out: b"]}"#,
+        )
+        .unwrap();
+        assert_eq!("a", loaded.mods[0].id);
+        assert_eq!(Path::new("/mods/a.jar"), loaded.mods[0].path);
+        assert!(loaded.present.is_empty());
+        assert_eq!(vec!["left out: b"], loaded.notes);
 
         let refused = |answer| match parse::<Loaded>(answer) {
             Err(Error::Refused(message)) => message,
@@ -230,6 +274,31 @@ mod tests {
             "java.io.IOException: disk full",
             refused("java.io.IOException: disk full")
         );
+    }
+
+    #[test]
+    fn reads_the_game() {
+        let game: Game =
+            parse(r#"{"version":"26.3","directory":"/home/me/.minecraft","frameworks":["Fabric"],"isClient":true}"#)
+                .unwrap();
+        assert_eq!("26.3", game.version);
+        assert_eq!(Path::new("/home/me/.minecraft"), game.directory);
+        assert_eq!(vec!["Fabric"], game.frameworks);
+        assert!(game.is_client);
+    }
+
+    #[test]
+    fn finds_the_value_after_an_argument() {
+        let game = jvm(&[
+            "java",
+            "net.minecraft.client.main.Main",
+            "--gameDir",
+            "/home/me/.minecraft",
+            "--demo",
+        ]);
+        assert_eq!(Some("/home/me/.minecraft"), game.argument("--gameDir"));
+        assert_eq!(None, game.argument("--demo"));
+        assert_eq!(None, game.argument("--version"));
     }
 
     #[test]

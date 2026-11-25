@@ -7,7 +7,7 @@ Minecraft 26.3+ (Mojang names, unobfuscated), Java 25. Root package `net.ccbluex
 | `rust/` | a launcher's process, or its own as the command line tool (crate `modloader`; the program needs feature `cli`) | `ModLoader` (the typed requests), finding games (`Jvm`), HotSpot's attach protocol (`attach.rs`, `attach/unix.rs`, `attach/windows.rs`); `main.rs` is the tool |
 | `agent/` | the game's system class loader | `Agent`, the entry of `modloader.jar`, built here with the modules below under `lib/`; the tests of the whole |
 | `bridge/` | the game's bootstrap class path | `Bridge.link`, the bootstrap method of every call the compiler writes into a class |
-| `loader/` | a class loader below the game's | `ModLoader` (the commands), `Mod`, `ModClassLoader`, the `Framework` and `ModFile` contract; in `mixin`: `MixinManager` (redefines and reverts), `Linker` (links the Bridge calls), the `MixinCompiler` contract |
+| `loader/` | a class loader below the game's | `ModLoader` (the commands), `Mod`, `ModClassLoader`, `Game` (what the game says about itself), the `Framework` and `ModFile` contract; in `mixin`: `MixinManager` (redefines and reverts), `Linker` (links the Bridge calls), the `MixinCompiler` contract |
 | `api/` | same | what mods compile against |
 | `framework/<name>/` | same | one `Framework` and `ModFile` per mod framework, found through `META-INF/services` |
 | `mixin/` | a `CompilerClassLoader`, new for every compilation, with the bundled Mixin, MixinExtras and ASM | `Compiler`: `MixinSession` runs Mixin, `Outliner` splits a mixed class into redefinition and companion, `Rewriter` hands instructions to `Linker` |
@@ -15,6 +15,13 @@ Minecraft 26.3+ (Mojang names, unobfuscated), Java 25. Root package `net.ccbluex
 
 A new framework is a module under `framework/`, its name in `settings.gradle.kts` and its `runtime(...)` line in
 `agent/build.gradle.kts`.
+
+The version is one number in two places that change together: `modloaderVersion` (the default in the root
+`build.gradle.kts`, with `-SNAPSHOT`) and `version` in `rust/Cargo.toml` (without). A tag `v0.1.0` makes CI build
+with `-PmodloaderVersion=0.1.0` and publish to Maven's releases; `main` publishes the default to snapshots. A module
+that publishes applies `maven-publish` and declares one publication `maven` with its `artifactId`; the repository
+and the POM come from the root script. `agent` publishes its jar alone, without the `java` component, so the POM of
+`net.ccbluex:modloader` lists no dependencies.
 
 `README.md` is usage only. Which parts of a mod run where, how mixins reach loaded classes and what a running game
 cannot take are in `docs/how-it-works.md`; a changed behavior or limit is written there.
@@ -47,7 +54,19 @@ quilt or forge, another session's game test included.
   `Bridge`'s one method and one field have to stay as an older copy has them.
 - The loader's request and answers are JSON: the records at the top of the Java `ModLoader` and the serde types in
   `rust/src/lib.rs` change together. `Agent` has no Gson; when the loader cannot start, it answers plain text, which
-  the crate reports as `Error::Refused`.
+  the crate reports as `Error::Refused`. A launcher pairs its crate with the newest agent on Maven of the same
+  major.minor, so within one a request keeps its fields and their meaning and an answer only gains fields; anything
+  else is a new minor in both places.
+- One `load` is one request with all its jars, and what `ModLoader.load` does with them is in this order: system
+  properties, reading every jar (one that is no mod refuses all), leaving out what the game has (`present`) and
+  what a framework that did not start the game supplies itself (`Framework.bringsIn`), opening the rest,
+  `Framework.bringIn` once per such framework, dependencies, one mixin compilation, one task on the game thread.
+  That task runs `Mod.startInFramework` of every mod, then `Mod.start` (the `RuntimeMod`s) of every mod, in the
+  order given. `Mod.start` is where a class of a mod first loads, after every `ModFile.start`.
+- A jar `Framework.bringsIn` names has to stay out of `Framework.bringIn`: a Fabric API jar among the mods names
+  every module, and `FabricApi.used` would bring all of them. `FabricApi.used` reads the jars it is given and none
+  inside them; bundled mods are in the list themselves. A mod the framework brings wins over one of the same id in
+  the load (`ModLoader.bringIn`).
 - Formats and plumbing go through libraries, not own code: NightConfig for `mods.toml` (shipped in `lib/runtime`;
   the loader's class loader asks the game first, so NeoForge's and Forge's own copy wins there), the game's Gson and
   Guava (`compileOnly`), and in the crate serde, clap, tempfile, thiserror and sysinfo.
@@ -81,13 +100,13 @@ quilt or forge, another session's game test included.
   be cast to MinecraftRegisterPayload`). Its API classes stay; a call that needs a connection's addon, such as
   `ClientPlayNetworking.getSendable`, fails there with a `ClassCastException`.
 - A mod whose framework did not start the game (`Framework.hasStartedGame`) is relaxed: a failing entrypoint
-  (`Mod.start`), an injector without target (`MixinHost.relax`, `MixinSession.leftOut`) or that does not fit it
-  (`MixinHost.drop`, then Mixin runs over the class again), a method change `Outliner` refuses and a failing appended
-  static initializer (`MixinManager.apply`) of a class it mixes into become `left out:` notes. An accessor whose
-  method the target has already is dropped, and `Linker` sends calls of it to the target's method. An injector that
-  names a method or call the game's framework replaced (`Framework.replacements`: NeoForge's and Forge's HUD layers
-  and screen hooks) gets its replacement, where the class has the method that took its place or no longer calls the
-  original. A framework lists only what it replaced in the running game: Forge keeps
+  (`Mod.startInFramework`), an injector without target (`MixinHost.relax`, `MixinSession.leftOut`) or that does not
+  fit it (`MixinHost.drop`, then Mixin runs over the class again), a method change `Outliner` refuses and a failing
+  appended static initializer (`MixinManager.apply`) of a class it mixes into become `left out:` notes. An accessor
+  whose method the target has already is dropped, and `Linker` sends calls of it to the target's method. An injector
+  that names a method or call the game's framework replaced (`Framework.replacements`: NeoForge's and Forge's HUD
+  layers and screen hooks) gets its replacement, where the class has the method that took its place or no longer
+  calls the original. A framework lists only what it replaced in the running game: Forge keeps
   `Hud.extractHotbarAndDecorations` but draws its parts as layers (`ForgeLayeredDraw`), so the HUD of a Fabric mod
   hooked there never showed. An injector that names a method by name alone, which the framework overloaded, gets
   the overloads its `@Inject` handler's parameters and its points' targets fit (`MixinHost.pin`): Mixin takes the
@@ -201,7 +220,7 @@ Mixins:
 - Mod classes load through `ModClassLoader`. On Fabric and Quilt, Knot's parent is a `SharedClassLoader` that finds
   them, so libraries Knot loaded see the mods' classes and services. A mod's own lookups skip it (`MOD_LOOKUP`): the
   JVM keeps every class a loader returned, so a class Knot handed out once stays the old one after `unload`. Only
-  `Mod.start` and the compilation run with the mod's as context class loader.
+  `Mod.startInFramework`, `Mod.start` and the compilation run with the mod's as context class loader.
 - A mod's class loader takes `kotlin` and `kotlinx` classes from the loaded mods' jars before the game's
   (`ModClassLoader.isModFirst`), and `Rewriter` counts those as the mods', not the game's: a game whose Kotlin
   comes from another framework's language mod (KotlinLangForge on NeoForge) keeps kotlinx's services to its own

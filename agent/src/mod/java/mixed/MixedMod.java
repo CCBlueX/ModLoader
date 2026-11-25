@@ -23,7 +23,8 @@ public final class MixedMod implements RuntimeMod {
             return accessor.getCount() + " " + accessor.callStep() + " " + ((Named) counter).modName() + " " + (counter instanceof Named)
                     + " " + Main.vault.secret + " " + Vault.opened;
         };
-        System.out.println("mixed loaded");
+        String property = System.getProperty("mixed.property");
+        System.out.println(property == null ? "mixed loaded" : "mixed loaded with " + property);
     }
 
     @Override

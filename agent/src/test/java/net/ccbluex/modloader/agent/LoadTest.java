@@ -68,6 +68,39 @@ class LoadTest {
     }
 
     @Test
+    void loadsSeveralJarsAsOne(@TempDir Path directory) throws Exception {
+        String example = System.getProperty("example.jar");
+        String mixed = System.getProperty("mixed.jar");
+        Path other = directory.resolve("other.jar");
+        try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(other))) {
+            entry(out, "other.txt", "no mod".getBytes());
+        }
+        Path missing = directory.resolve("missing.jar");
+
+        // One jar that cannot load, and none of them does.
+        assertEquals("error: " + missing + ": no such file", cli("load", example, missing.toString()));
+        assertEquals("error: " + other + " is not a mod of [Fabric, Forge, NeoForge, Quilt]",
+                cli("load", example, other.toString(), mixed));
+        assertEquals("no mods loaded", cli("list"));
+
+        String loaded = """
+                loaded mixed (Fabric)
+                loaded example (Fabric)
+                  left out: a change to the static initializer of net.minecraft.world.Vault, which has already run
+                  left out: mixed.mixin.VaultMixin.closedBefore, which finds no target in net.minecraft.world.Vault""";
+        assertEquals(loaded, cli("load", "-D", "mixed.property=set at the load", mixed, example));
+        // The mods start in the order given, and the property was set before the first of them.
+        assertEquals("mixed loaded with set at the load", gameOutput.readLine());
+        assertEquals("[example] loaded on Attach Listener", gameOutput.readLine());
+        assertEquals("example is already loaded\nmixed is already loaded", cli("load", example, mixed));
+    }
+
+    @Test
+    void tellsVersionFrameworksAndDirectory() throws Exception {
+        assertEquals("26.3\nno mod framework\n" + Path.of("").toAbsolutePath(), cli("game"));
+    }
+
+    @Test
     void mixesIntoLoadedClassAndBack() throws Exception {
         assertEquals("1", send("tick"));
         assertEquals("2", send("tick"));

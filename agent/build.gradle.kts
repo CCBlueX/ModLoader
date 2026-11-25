@@ -1,3 +1,7 @@
+plugins {
+    `maven-publish`
+}
+
 // What runs inside the game. The agent unpacks it from lib/ of the jar, one directory per class loader.
 val boot: Configuration = configurations.create("boot")
 val runtime: Configuration = configurations.create("runtime")
@@ -44,6 +48,16 @@ tasks.jar {
     from(boot) { into("lib/boot") }
     from(runtime) { into("lib/runtime") }
     from(mixin) { into("lib/mixin") }
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("maven") {
+            // Only the jar, so the POM lists no dependencies: they are inside it.
+            artifact(tasks.jar)
+            artifactId = "modloader"
+        }
+    }
 }
 
 val modJar = tasks.register<Jar>("modJar") {

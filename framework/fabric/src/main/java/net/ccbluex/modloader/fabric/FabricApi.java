@@ -2,7 +2,6 @@ package net.ccbluex.modloader.fabric;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -86,20 +85,27 @@ final class FabricApi {
     }
 
     /**
-     * The modules {@code named} names and the ones whose classes the jar or a jar inside it names, as a type or in
-     * a string such as one for {@code Class.forName}; then what they depend on, each before the modules that need it.
+     * The modules {@code named} names and the ones whose classes the jars name, as a type or in a string such as one
+     * for {@code Class.forName}; then what they depend on, each before the modules that need it. A mod bundled in a
+     * jar is among {@code jars} itself, so a jar inside a jar is not read.
      */
-    List<Path> used(Path jar, Set<String> named) throws IOException {
+    List<Path> used(List<Path> jars, Set<String> named) throws IOException {
         Set<String> ids = new LinkedHashSet<>();
         named.stream().filter(modules::containsKey).forEach(ids::add);
-        try (InputStream in = Files.newInputStream(jar)) {
-            scan(in, ids);
+        for (Path jar : jars) {
+            try (ZipInputStream zip = new ZipInputStream(Files.newInputStream(jar))) {
+                for (ZipEntry entry = zip.getNextEntry(); entry != null; entry = zip.getNextEntry()) {
+                    if (entry.getName().endsWith(".class")) {
+                        names(zip.readAllBytes(), ids);
+                    }
+                }
+            }
         }
         Set<String> ordered = new LinkedHashSet<>();
         ids.forEach(id -> add(id, ordered));
-        List<Path> jars = new ArrayList<>();
-        ordered.forEach(id -> jars.add(modules.get(id)));
-        return jars;
+        List<Path> used = new ArrayList<>();
+        ordered.forEach(id -> used.add(modules.get(id)));
+        return used;
     }
 
     private void add(String id, Set<String> ordered) {
@@ -108,17 +114,6 @@ final class FabricApi {
                     .filter(modules::containsKey)
                     .forEach(dependency -> add(dependency, ordered));
             ordered.add(id);
-        }
-    }
-
-    private void scan(InputStream jar, Set<String> ids) throws IOException {
-        ZipInputStream zip = new ZipInputStream(jar);
-        for (ZipEntry entry = zip.getNextEntry(); entry != null; entry = zip.getNextEntry()) {
-            if (entry.getName().endsWith(".jar")) {
-                scan(new ByteArrayInputStream(zip.readAllBytes()), ids);
-            } else if (entry.getName().endsWith(".class")) {
-                names(zip.readAllBytes(), ids);
-            }
         }
     }
 
