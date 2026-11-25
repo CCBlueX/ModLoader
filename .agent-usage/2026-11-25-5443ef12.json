@@ -1,0 +1,19 @@
+{
+  "date": "2026-11-25",
+  "change": "refactor: libraries over own code",
+  "tool": "omp",
+  "models": [
+    {
+      "model": "claude-fable-5-2",
+      "provider": "anthropic",
+      "tokens": { "input": 56, "cachedInput": 21822292, "cacheWrite": 96429, "output": 44431 },
+      "usd": 7.69
+    },
+    {
+      "model": "claude-haiku-5-5",
+      "provider": "anthropic",
+      "tokens": { "input": 70, "cachedInput": 1611879, "cacheWrite": 358906, "output": 64607 },
+      "usd": 0.12
+    }
+  ]
+}

@@ -1,15 +1,17 @@
 package net.ccbluex.modloader;
 
+import com.electronwill.nightconfig.core.Config;
+import com.electronwill.nightconfig.toml.TomlParser;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
@@ -21,24 +23,25 @@ import java.util.jar.JarFile;
  */
 public abstract class TomlModFile extends ModFile {
 
-    protected final Map<String, List<Map<String, String>>> toml;
+    protected final Config toml;
     private final List<String> nestedJars;
 
-    protected TomlModFile(Framework framework, Path path, Map<String, List<Map<String, String>>> toml, List<String> nestedJars) {
-        super(framework, path, toml.get("mods").getFirst().get("modId"));
+    protected TomlModFile(Framework framework, Path path, Config toml, List<String> nestedJars) {
+        super(framework, path, toml.<List<Config>>get("mods").getFirst().get("modId"));
         this.toml = toml;
         this.nestedJars = nestedJars;
     }
 
     /** The mods.toml at {@code entry} of the jar, or null when the jar has none or it describes no mod. */
-    public static Map<String, List<Map<String, String>>> read(JarFile jar, String entry) throws IOException {
+    public static Config read(JarFile jar, String entry) throws IOException {
         JarEntry metadata = jar.getJarEntry(entry);
         if (metadata == null) {
             return null;
         }
-        Map<String, List<Map<String, String>>> toml =
-                Toml.parse(new String(jar.getInputStream(metadata).readAllBytes(), StandardCharsets.UTF_8));
-        return toml.containsKey("mods") ? toml : null;
+        try (InputStream in = jar.getInputStream(metadata)) {
+            Config toml = new TomlParser().parse(in);
+            return toml.contains("mods") ? toml : null;
+        }
     }
 
     public static List<String> nestedJars(JarFile jar) throws IOException {
@@ -55,13 +58,13 @@ public abstract class TomlModFile extends ModFile {
     }
 
     /** Whether a {@code [[dependencies.<id>]]} table names a mod this one cannot run without. */
-    protected abstract boolean isRequired(Map<String, String> dependency);
+    protected abstract boolean isRequired(Config dependency);
 
     @Override
     public List<String> dependencies() {
-        return toml.getOrDefault("dependencies." + id, List.of()).stream()
+        return toml.<List<Config>>getOrElse(List.of("dependencies", id), List.of()).stream()
                 .filter(this::isRequired)
-                .map(dependency -> dependency.get("modId"))
+                .map(dependency -> dependency.<String>get("modId"))
                 .toList();
     }
 

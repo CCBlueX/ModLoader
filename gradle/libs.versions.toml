@@ -3,6 +3,9 @@
 gson = "2.14.0"
 guava = "33.6.0-jre"
 
+# What NeoForge and Forge read mods.toml with; shipped for the games without them.
+nightconfig = "3.9.0"
+
 # What Fabric Loader 0.20.1 runs Mixin with.
 asm = "9.10.1"
 mixin = "0.17.5+mixin.0.8.7"
@@ -17,6 +20,7 @@ jspecify = "1.0.0"
 [libraries]
 gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
 guava = { module = "com.google.guava:guava", version.ref = "guava" }
+nightconfig-toml = { module = "com.electronwill.night-config:toml", version.ref = "nightconfig" }
 
 asm = { module = "org.ow2.asm:asm", version.ref = "asm" }
 asm-tree = { module = "org.ow2.asm:asm-tree", version.ref = "asm" }

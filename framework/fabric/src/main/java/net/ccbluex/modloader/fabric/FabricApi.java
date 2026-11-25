@@ -18,6 +18,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -27,13 +29,12 @@ import java.util.zip.ZipInputStream;
  * game's classes breaks what nobody asked for, such as model loading.
  *
  * @agent claude-opus-5-5
+ * @agent claude-fable-5-2
  */
 final class FabricApi {
 
-    private static final byte[][] MARKERS = {
-            "net/fabricmc/fabric/".getBytes(StandardCharsets.US_ASCII),
-            "net.fabricmc.fabric.".getBytes(StandardCharsets.US_ASCII)
-    };
+    /** A class or package of Fabric API, as code names it and as a string for {@code Class.forName} does. */
+    private static final Pattern NAME = Pattern.compile("net([/.])fabricmc\\1fabric\\1[\\w$/.]+");
 
     /** By id, the jar of every module. */
     private final Map<String, Path> modules = new HashMap<>();
@@ -115,35 +116,17 @@ final class FabricApi {
 
     /** The modules of the names in the class file, which keeps them as plain ASCII in its constant pool. */
     private void names(byte[] bytes, Set<String> ids) {
-        for (byte[] marker : MARKERS) {
-            for (int start = indexOf(bytes, marker, 0); start >= 0; start = indexOf(bytes, marker, start + 1)) {
-                int end = start;
-                while (end < bytes.length && (Character.isJavaIdentifierPart(bytes[end]) || bytes[end] == '/' || bytes[end] == '.')) {
-                    end++;
+        Matcher found = NAME.matcher(new String(bytes, StandardCharsets.ISO_8859_1));
+        while (found.find()) {
+            String name = found.group().replace('.', '/');
+            while (name.contains("/")) {
+                String id = packages.get(name);
+                if (id != null) {
+                    ids.add(id);
+                    break;
                 }
-                String name = new String(bytes, start, end - start, StandardCharsets.US_ASCII).replace('.', '/');
-                while (name.contains("/")) {
-                    String id = packages.get(name);
-                    if (id != null) {
-                        ids.add(id);
-                        break;
-                    }
-                    name = name.substring(0, name.lastIndexOf('/'));
-                }
+                name = name.substring(0, name.lastIndexOf('/'));
             }
         }
-    }
-
-    private static int indexOf(byte[] bytes, byte[] part, int from) {
-        outer:
-        for (int i = from; i <= bytes.length - part.length; i++) {
-            for (int j = 0; j < part.length; j++) {
-                if (bytes[i + j] != part[j]) {
-                    continue outer;
-                }
-            }
-            return i;
-        }
-        return -1;
     }
 }

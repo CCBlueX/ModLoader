@@ -1,9 +1,9 @@
 package net.ccbluex.modloader.forge;
 
+import com.electronwill.nightconfig.core.Config;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 import java.util.jar.JarFile;
 import java.util.jar.Manifest;
 import net.ccbluex.modloader.Framework;
@@ -44,7 +44,7 @@ public final class Forge implements Framework {
     @Override
     public ModFile read(Path jar) throws IOException {
         try (JarFile file = new JarFile(jar.toFile())) {
-            Map<String, List<Map<String, String>>> toml = TomlModFile.read(file, "META-INF/mods.toml");
+            Config toml = TomlModFile.read(file, "META-INF/mods.toml");
             if (toml == null) {
                 return null;
             }

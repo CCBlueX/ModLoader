@@ -1,14 +1,11 @@
 package net.ccbluex.modloader.mixin;
 
+import com.google.common.collect.MapMaker;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
-import java.lang.ref.Reference;
-import java.lang.ref.ReferenceQueue;
-import java.lang.ref.WeakReference;
 import java.lang.reflect.Array;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * A field a mixin adds to a class that is already loaded and so cannot grow. Its values live here, by
@@ -41,8 +38,8 @@ final class VirtualField {
     private static final Object NULL = new Object();
 
     private final Object zero;
-    private final Map<Instance, Object> values = new ConcurrentHashMap<>();
-    private final ReferenceQueue<Object> collected = new ReferenceQueue<>();
+    /** Keyed by the instance itself, not by what it equals, and without keeping it alive. */
+    private final Map<Object, Object> values = new MapMaker().weakKeys().makeMap();
     private volatile Object staticValue;
     /** {@code (Object) -> Object}, the value of the field for an instance that has none yet; null for the zero. */
     volatile MethodHandle initializer;
@@ -73,43 +70,19 @@ final class VirtualField {
     }
 
     private Object get(Object instance) throws Throwable {
-        Object value = values.get(new Instance(instance, null));
+        Object value = values.get(instance);
         if (value == null) {
             MethodHandle first = initializer;
             if (first == null) {
                 return zero;
             }
             set(instance, first.invoke(instance));
-            value = values.get(new Instance(instance, null));
+            value = values.get(instance);
         }
         return value == NULL ? null : value;
     }
 
     private void set(Object instance, Object value) {
-        for (Reference<?> gone = collected.poll(); gone != null; gone = collected.poll()) {
-            values.remove(gone);
-        }
-        values.put(new Instance(instance, collected), value == null ? NULL : value);
-    }
-
-    /** Map key that is the instance itself, not what it equals, and does not keep it alive. */
-    private static final class Instance extends WeakReference<Object> {
-
-        private final int hash;
-
-        Instance(Object instance, ReferenceQueue<Object> queue) {
-            super(instance, queue);
-            this.hash = System.identityHashCode(instance);
-        }
-
-        @Override
-        public int hashCode() {
-            return hash;
-        }
-
-        @Override
-        public boolean equals(Object other) {
-            return other == this || other instanceof Instance key && key.get() == get() && get() != null;
-        }
+        values.put(instance, value == null ? NULL : value);
     }
 }

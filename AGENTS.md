@@ -45,6 +45,9 @@ quilt or forge, another session's game test included.
 - The loader's request and answers are JSON: the records at the top of the Java `ModLoader` and the serde types in
   `rust/src/lib.rs` change together. `Agent` has no Gson; when the loader cannot start, it answers plain text, which
   the crate reports as `Error::Refused`.
+- Formats and plumbing go through libraries, not own code: NightConfig for `mods.toml` (shipped in `lib/runtime`;
+  the loader's class loader asks the game first, so NeoForge's and Forge's own copy wins there), the game's Gson and
+  Guava (`compileOnly`), and in the crate serde, clap, tempfile, thiserror and sysinfo.
 - The crate speaks attach protocol 2 only, which Java 24 brought: the request has no size limit, and on Windows it
   travels over the pipe, so the thread started in the JVM calls `JVM_EnqueueOperation_v2` directly, at jvm.dll's
   address there plus the function's offset in a mapping of the same file here. Protocol 1 would need machine code

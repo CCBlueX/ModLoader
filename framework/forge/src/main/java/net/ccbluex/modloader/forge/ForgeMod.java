@@ -1,10 +1,10 @@
 package net.ccbluex.modloader.forge;
 
+import com.electronwill.nightconfig.core.Config;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 import net.ccbluex.modloader.Framework;
 import net.ccbluex.modloader.ModClassLoader;
 import net.ccbluex.modloader.TomlModFile;
@@ -14,15 +14,14 @@ final class ForgeMod extends TomlModFile {
 
     private final List<String> mixinConfigs;
 
-    ForgeMod(Framework framework, Path path, Map<String, List<Map<String, String>>> toml, List<String> nestedJars,
-            List<String> mixinConfigs) {
+    ForgeMod(Framework framework, Path path, Config toml, List<String> nestedJars, List<String> mixinConfigs) {
         super(framework, path, toml, nestedJars);
         this.mixinConfigs = mixinConfigs;
     }
 
     @Override
-    protected boolean isRequired(Map<String, String> dependency) {
-        return dependency.getOrDefault("mandatory", "false").equals("true");
+    protected boolean isRequired(Config dependency) {
+        return dependency.getOrElse("mandatory", false);
     }
 
     /** Forge names mixin configs in the jar manifest, not in mods.toml. */

@@ -1,10 +1,10 @@
 package net.ccbluex.modloader.neoforge;
 
+import com.electronwill.nightconfig.core.Config;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 import net.ccbluex.modloader.Framework;
 import net.ccbluex.modloader.ModClassLoader;
 import net.ccbluex.modloader.TomlModFile;
@@ -12,18 +12,18 @@ import net.ccbluex.modloader.TomlModFile;
 /** @agent claude-fable-5-2 */
 final class NeoForgeMod extends TomlModFile {
 
-    NeoForgeMod(Framework framework, Path path, Map<String, List<Map<String, String>>> toml, List<String> nestedJars) {
+    NeoForgeMod(Framework framework, Path path, Config toml, List<String> nestedJars) {
         super(framework, path, toml, nestedJars);
     }
 
     @Override
-    protected boolean isRequired(Map<String, String> dependency) {
-        return dependency.getOrDefault("type", "required").equalsIgnoreCase("required");
+    protected boolean isRequired(Config dependency) {
+        return dependency.getOrElse("type", "required").equalsIgnoreCase("required");
     }
 
     @Override
     public List<String> mixinConfigs() {
-        return toml.getOrDefault("mixins", List.of()).stream().map(mixin -> mixin.get("config")).toList();
+        return toml.<List<Config>>getOrElse("mixins", List.of()).stream().map(mixin -> mixin.<String>get("config")).toList();
     }
 
     @Override

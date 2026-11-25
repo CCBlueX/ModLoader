@@ -80,6 +80,8 @@ final class ModContainers {
             }
             ((List<?>) field("mods").get(loader)).remove(container);
 
+            // As in the Fabric adapter's ModContainers, which cannot load here: it names Fabric Loader classes
+            // Quilt's copy lacks.
             Object storage = field("entrypointStorage").get(loader);
             Field byKey = EntrypointStorage.class.getDeclaredField("entryMap");
             byKey.setAccessible(true);
