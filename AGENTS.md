@@ -11,7 +11,7 @@ client builds work when loaded this way. Gradle project names are the module nam
 | `attach/` | a launcher's process, or its own as the command line tool (crate `modloader`; the program needs feature `cli`) | `ModLoader` (the typed requests), finding games (`Jvm`), HotSpot's attach protocol (`attach.rs`, `attach/unix.rs`, `attach/windows.rs`); `main.rs` is the tool |
 | `game/agent/` | the game's system class loader | `Agent`, the entry of `modloader.jar`, built here with the modules below under `lib/`; the tests of the whole |
 | `game/bridge/` | the game's bootstrap class path | `Bridge.link`, the bootstrap method of every call the compiler writes into a class |
-| `game/loader/` | a class loader below the game's | `ModLoader` (the commands), `Mod`, `ModClassLoader`, `Game` (what the game says about itself), the `Framework` and `ModFile` contract; in `mixin`: `MixinManager` (redefines and reverts), `Linker` (links the Bridge calls), the `MixinCompiler` contract |
+| `game/loader/` | a class loader below the game's | `ModLoader` (the commands), `Mod`, `ModClassLoader`, `Instance` (what the instance says about itself), the `Framework` and `ModFile` contract; in `mixin`: `MixinManager` (redefines and reverts), `Linker` (links the Bridge calls), the `MixinCompiler` contract |
 | `api/` | same | what mods compile against |
 | `game/framework/<name>/` | same | one `Framework` and `ModFile` per mod framework, found through `META-INF/services` |
 | `game/mixin/` | a `CompilerClassLoader`, new for every compilation, with the bundled Mixin, MixinExtras and ASM | `Compiler`: `MixinSession` runs Mixin, `Outliner` splits a mixed class into redefinition and companion, `Rewriter` hands instructions to `Linker` |
@@ -95,9 +95,9 @@ quilt or forge, another session's game test included.
 - Mojang names for the game (`net.minecraft.client.Minecraft`, `net.minecraft.server.Main`) are used as strings;
   no module compiles against Minecraft.
 - `Fabric.bringIn` puts Fabric Loader and the libraries the game lacks on the system class path for good, and
-  `RunningGame` is its launcher and game provider. Until then nothing in the loader's class loader may link a
+  `RunningInstance` is its launcher and game provider. Until then nothing in the loader's class loader may link a
   `net.fabricmc` class: a failed lookup sticks to the class that tried, so only `Framework.hasClass` asks.
-  `Fabric.isBroughtIn` compares class names, as a newer loader has its own `RunningGame`. A later load whose mods
+  `Fabric.isBroughtIn` compares class names, as a newer loader has its own `RunningInstance`. A later load whose mods
   need more of Fabric API gets those modules on top.
 - NeoForge and Forge run the game's payload channels themselves, `minecraft:register` included. In their games
   Fabric API's networking module comes without its mixins (`FabricMod.mixinConfigs`), or its own registration

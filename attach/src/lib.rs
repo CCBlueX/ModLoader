@@ -1,13 +1,14 @@
 //! Loads mods into a running Minecraft, for launchers and other tools.
 //!
-//! [`ModLoader`] talks to the loader inside a game and [`Jvm::all`] finds games this process did not start. No Java
-//! is started: the game's own JVM runs the agent in `modloader.jar`. Every call blocks until the game has answered.
+//! [`ModLoader`] talks to the loader inside an instance and [`Jvm::all`] finds instances this process did not start.
+//! No Java is started: the game's own JVM runs the agent in `modloader.jar`. Every call blocks until the game has
+//! answered.
 //!
 //! ```no_run
 //! # let process = std::process::Command::new("java").spawn()?;
 //! let loader = modloader::ModLoader::new(process.id(), "modloader.jar");
-//! let game = loader.game()?;
-//! println!("Minecraft {} in {}", game.version, game.directory.display());
+//! let instance = loader.instance()?;
+//! println!("Minecraft {} in {}", instance.version, instance.directory.display());
 //! // One load: the mods start together, as at the game's start, with the property set before any of them runs.
 //! let loaded = loader.load(&["mods/library.jar", "mods/mymod.jar"], &[("mymod.folder", "/data/mymod")])?;
 //! for loaded in &loaded.mods {
@@ -44,7 +45,7 @@ pub enum Error {
     Refused(String),
 }
 
-/// The loader inside one running game, on Java 24 or later.
+/// The loader inside one running instance, on Java 24 or later.
 ///
 /// @agent claude-fable-5-2
 #[derive(Debug, Clone)]
@@ -53,12 +54,12 @@ pub struct ModLoader {
     agent: PathBuf,
 }
 
-/// The game a [`ModLoader`] talks to.
+/// The instance a [`ModLoader`] talks to.
 ///
 /// @agent claude-fable-5-2
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Game {
+pub struct Instance {
     /// Minecraft's own version, such as `26.3`.
     pub version: String,
     /// The game directory; of a dedicated server, its working directory.
@@ -101,8 +102,8 @@ impl ModLoader {
         }
     }
 
-    pub fn game(&self) -> Result<Game, Error> {
-        self.request(json!({ "command": "game" }))
+    pub fn instance(&self) -> Result<Instance, Error> {
+        self.request(json!({ "command": "instance" }))
     }
 
     /// Loads the jars together, as the mods of one game start, and sets `properties` as system properties of the
@@ -245,7 +246,7 @@ impl fmt::Display for Jvm {
 mod tests {
     use std::path::Path;
 
-    use super::{Error, Game, Jvm, Loaded, parse};
+    use super::{Error, Instance, Jvm, Loaded, parse};
 
     fn jvm(command: &[&str]) -> Jvm {
         Jvm {
@@ -277,14 +278,14 @@ mod tests {
     }
 
     #[test]
-    fn reads_the_game() {
-        let game: Game =
+    fn reads_the_instance() {
+        let instance: Instance =
             parse(r#"{"version":"26.3","directory":"/home/me/.minecraft","frameworks":["Fabric"],"isClient":true}"#)
                 .unwrap();
-        assert_eq!("26.3", game.version);
-        assert_eq!(Path::new("/home/me/.minecraft"), game.directory);
-        assert_eq!(vec!["Fabric"], game.frameworks);
-        assert!(game.is_client);
+        assert_eq!("26.3", instance.version);
+        assert_eq!(Path::new("/home/me/.minecraft"), instance.directory);
+        assert_eq!(vec!["Fabric"], instance.frameworks);
+        assert!(instance.is_client);
     }
 
     #[test]

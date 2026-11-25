@@ -53,11 +53,11 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
     }
 
     /**
-     * The answer to {@code game}. {@code frameworks} also names the ones ModLoader brought in.
+     * The answer to {@code instance}. {@code frameworks} also names the ones ModLoader brought in.
      *
      * @agent claude-fable-5-2
      */
-    private record Running(String version, String directory, List<String> frameworks, boolean isClient) {
+    private record Description(String version, String directory, List<String> frameworks, boolean isClient) {
     }
 
     /**
@@ -119,9 +119,9 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
         Object answer;
         try {
             answer = switch (request.command()) {
-                case "game" -> new Running(Game.version(), Game.directory().toString(),
+                case "instance" -> new Description(Instance.version(), Instance.directory().toString(),
                         frameworks.stream().filter(Framework::isPresent).map(Framework::name).toList(),
-                        Game.isClient());
+                        Instance.isClient());
                 case "load" -> load(Objects.requireNonNull(request.items(), "load needs jars"), request.properties());
                 case "unload" -> unload(Objects.requireNonNull(request.item(), "unload needs a mod id"));
                 case "list" -> new LoadedMods(mods.values().stream().map(mod -> new Entry(mod.file)).toList());
@@ -476,7 +476,7 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
     private static void runOnGameThread(Runnable task) {
         Object minecraft = null;
         Object server = null;
-        if (Game.isClient()) {
+        if (Instance.isClient()) {
             try {
                 ClassLoader game = ModLoader.class.getClassLoader();
                 Class<?> type = Class.forName("net.minecraft.client.Minecraft", false, game);

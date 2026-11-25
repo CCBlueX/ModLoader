@@ -16,7 +16,7 @@ import java.util.function.UnaryOperator;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import net.ccbluex.modloader.Framework;
-import net.ccbluex.modloader.Game;
+import net.ccbluex.modloader.Instance;
 import net.ccbluex.modloader.ModFile;
 import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.loader.impl.launch.FabricLauncherBase;
@@ -98,8 +98,8 @@ public final class Fabric implements Framework {
                     + "Sinytra Connector or Fabricated, beside which Fabric Loader cannot start");
         }
         try {
-            String version = Game.version();
-            Path directory = Game.directory();
+            String version = Instance.version();
+            Path directory = Instance.directory();
             // Everything is fetched before anything changes in the game.
             Path cache = directory.resolve(".modloader").resolve(version);
             Downloads downloads = new Downloads(cache, version);
@@ -114,10 +114,10 @@ public final class Fabric implements Framework {
             // Fabric Loader comes in once; the next mods, or the same after a failed load, still need their modules.
             if (!isPresent()) {
                 appendToClassPath(loader, instrumentation);
-                RunningGame.start(loader.getFirst(), version, directory);
+                RunningInstance.start(loader.getFirst(), version, directory);
             }
             if (needed.contains("fabric-api") && !isLoaded("fabric-api")) {
-                RunningGame.standIn(api, "fabric-api", apiVersion(api), "Fabric API");
+                RunningInstance.standIn(api, "fabric-api", apiVersion(api), "Fabric API");
             }
             return jars;
         } catch (ReflectiveOperationException e) {
@@ -163,7 +163,7 @@ public final class Fabric implements Framework {
     /** Whether ModLoader started Fabric Loader in this game, rather than Knot at the game's start. */
     static boolean isBroughtIn() {
         // By name: a newer ModLoader has its own copy of the class.
-        return FabricLauncherBase.getLauncher().getClass().getName().equals(RunningGame.class.getName());
+        return FabricLauncherBase.getLauncher().getClass().getName().equals(RunningInstance.class.getName());
     }
 
     @Override

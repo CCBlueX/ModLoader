@@ -97,7 +97,7 @@ class LoadTest {
 
     @Test
     void tellsVersionFrameworksAndDirectory() throws Exception {
-        assertEquals("26.3\nno mod framework\n" + Path.of("").toAbsolutePath(), cli("game"));
+        assertEquals("26.3\nno mod framework\n" + Path.of("").toAbsolutePath(), cli("instance"));
     }
 
     @Test

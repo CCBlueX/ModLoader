@@ -5,13 +5,13 @@ import java.lang.reflect.Field;
 import java.nio.file.Path;
 
 /**
- * What the running game says about itself, asked through its classes by name.
+ * What the running instance says about itself, asked through its classes by name.
  *
  * @agent claude-fable-5-2
  */
-public final class Game {
+public final class Instance {
 
-    private Game() {
+    private Instance() {
     }
 
     /** A dedicated server has no {@code Minecraft} class. */
@@ -21,7 +21,7 @@ public final class Game {
 
     /** Minecraft's own version, such as {@code 26.3}. */
     public static String version() throws ReflectiveOperationException {
-        ClassLoader game = Game.class.getClassLoader();
+        ClassLoader game = Instance.class.getClassLoader();
         Object current = Class.forName("net.minecraft.SharedConstants", false, game)
                 .getMethod("getCurrentVersion")
                 .invoke(null);
@@ -33,7 +33,7 @@ public final class Game {
             // A dedicated server runs in its directory.
             return Path.of("").toAbsolutePath();
         }
-        Class<?> minecraft = Class.forName("net.minecraft.client.Minecraft", false, Game.class.getClassLoader());
+        Class<?> minecraft = Class.forName("net.minecraft.client.Minecraft", false, Instance.class.getClassLoader());
         Field directory = minecraft.getField("gameDirectory");
         return ((File) directory.get(minecraft.getMethod("getInstance").invoke(null))).toPath().toAbsolutePath();
     }

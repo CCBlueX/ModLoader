@@ -21,7 +21,7 @@ struct Arguments {
 /// @agent claude-fable-5-2
 #[derive(Subcommand)]
 enum Command {
-    /// Load mods into the running game, together
+    /// Load mods into the running instance, together
     Load {
         /// System property to set in the game before the mods start; may repeat
         #[arg(short = 'D', value_name = "KEY=VALUE", value_parser = property)]
@@ -36,8 +36,8 @@ enum Command {
     },
     /// Show the mods loaded this way
     List,
-    /// Show the game's version, mod frameworks and directory
-    Game,
+    /// Show the instance's version, mod frameworks and directory
+    Instance,
 }
 
 /// @agent claude-fable-5-2
@@ -72,7 +72,7 @@ fn run(arguments: Arguments) -> Result<bool, Box<dyn Error>> {
     }
     let pid = match arguments.pid {
         Some(pid) => pid,
-        None => game()?,
+        None => instance()?,
     };
     let loader = ModLoader::new(pid, agent);
     let mut is_done = true;
@@ -117,15 +117,15 @@ fn run(arguments: Arguments) -> Result<bool, Box<dyn Error>> {
                 println!("{} ({}) {}", loaded.id, loaded.framework, loaded.path.display());
             }
         }
-        Command::Game => {
-            let running = loader.game()?;
-            println!("{}", running.version);
-            if running.frameworks.is_empty() {
+        Command::Instance => {
+            let instance = loader.instance()?;
+            println!("{}", instance.version);
+            if instance.frameworks.is_empty() {
                 println!("no mod framework");
             } else {
-                println!("{}", running.frameworks.join(", "));
+                println!("{}", instance.frameworks.join(", "));
             }
-            println!("{}", running.directory.display());
+            println!("{}", instance.directory.display());
         }
     }
     Ok(is_done)
@@ -134,16 +134,16 @@ fn run(arguments: Arguments) -> Result<bool, Box<dyn Error>> {
 /// The one running Minecraft, or the choice to make with `--pid`.
 ///
 /// @agent claude-fable-5-2
-fn game() -> Result<u32, String> {
+fn instance() -> Result<u32, String> {
     let running = Jvm::all();
-    let games: Vec<&Jvm> = running.iter().filter(|jvm| jvm.is_minecraft()).collect();
-    if let [game] = games[..] {
-        return Ok(game.pid);
+    let instances: Vec<&Jvm> = running.iter().filter(|jvm| jvm.is_minecraft()).collect();
+    if let [instance] = instances[..] {
+        return Ok(instance.pid);
     }
-    let (mut message, choice) = if games.is_empty() {
+    let (mut message, choice) = if instances.is_empty() {
         (String::from("no running Minecraft found"), running.iter().collect())
     } else {
-        (String::from("several games are running"), games)
+        (String::from("several instances are running"), instances)
     };
     message.push_str("; pass --pid with one of:");
     for jvm in choice {

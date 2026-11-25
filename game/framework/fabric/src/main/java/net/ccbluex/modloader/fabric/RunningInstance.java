@@ -27,13 +27,13 @@ import org.jspecify.annotations.Nullable;
  *
  * @agent claude-opus-5-5
  */
-final class RunningGame extends FabricLauncherBase implements GameProvider {
+final class RunningInstance extends FabricLauncherBase implements GameProvider {
 
     private final ClassLoader game = Framework.class.getClassLoader().getParent();
     private final String version;
     private final Path directory;
 
-    private RunningGame(String version, Path directory) {
+    private RunningInstance(String version, Path directory) {
         this.version = version;
         this.directory = directory;
     }
@@ -41,7 +41,7 @@ final class RunningGame extends FabricLauncherBase implements GameProvider {
     /** Starts Fabric Loader from its jar on the game's class path, with the mods every Fabric game has. */
     static void start(Path loader, String version, Path directory) throws ReflectiveOperationException, IOException {
         Log.init(new Slf4jLogHandler());
-        RunningGame running = new RunningGame(version, directory);
+        RunningInstance running = new RunningInstance(version, directory);
         FabricLoaderImpl.INSTANCE.setGameProvider(running);
         for (BuiltinMod mod : running.getBuiltinMods()) {
             ModContainers.add(mod);

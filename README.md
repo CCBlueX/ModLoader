@@ -22,12 +22,12 @@ modloader = { git = "https://github.com/CCBlueX/ModLoader" }
 ```rust
 use modloader::{Jvm, ModLoader};
 
-// A game the launcher started, or one already running.
+// An instance the launcher started, or one already running.
 let pid = Jvm::all().into_iter().find(Jvm::is_minecraft).unwrap().pid;
 // net.ccbluex:modloader from maven.ccbluex.net, the newest with the major.minor of modloader::VERSION
 let loader = ModLoader::new(pid, "modloader.jar");
 
-let game = loader.game()?; // version, directory, frameworks, is_client
+let instance = loader.instance()?; // version, directory, frameworks, is_client
 
 // The jars start together, as at the game's start; the properties are set first, as -D does.
 let loaded = loader.load(&["mods/library.jar", "mods/mymod.jar"], &[("mymod.folder", "/data/mymod")])?;
@@ -48,10 +48,10 @@ macOS):
 ```sh
 ./modloader load mymod.jar another.jar          # together: one that cannot load keeps all out
 ./modloader load -D mymod.folder=/data/mymod mymod.jar
-./modloader game                                # version, frameworks, directory
+./modloader instance                            # version, frameworks, directory
 ./modloader list
 ./modloader unload mymod
-./modloader --pid 4242 list                     # when several games run, or one started as server.jar
+./modloader --pid 4242 list                     # when several instances run, or one started as server.jar
 ```
 
 [How it works](docs/how-it-works.md) has the rest:

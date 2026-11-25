@@ -1,0 +1,13 @@
+{
+  "date": "2026-11-25",
+  "change": "refactor: game to instance",
+  "tool": "omp",
+  "models": [
+    {
+      "model": "claude-opus-5-5",
+      "provider": "anthropic",
+      "tokens": { "input": 56, "cachedInput": 3317015, "cacheWrite": 54964, "output": 25263 },
+      "usd": 1.61
+    }
+  ]
+}
