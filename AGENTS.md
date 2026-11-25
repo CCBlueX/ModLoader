@@ -16,6 +16,9 @@ Minecraft 26.3+ (Mojang names, unobfuscated), Java 25. Root package `net.ccbluex
 A new framework is a module under `framework/`, its name in `settings.gradle.kts` and its `runtime(...)` line in
 `agent/build.gradle.kts`.
 
+`README.md` is usage only. Which parts of a mod run where, how mixins reach loaded classes and what a running game
+cannot take are in `docs/how-it-works.md`; a changed behavior or limit is written there.
+
 ## Commands
 
 ```sh

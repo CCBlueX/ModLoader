@@ -1,0 +1,13 @@
+{
+  "date": "2026-11-25",
+  "change": "docs: slim readme",
+  "tool": "omp",
+  "models": [
+    {
+      "model": "claude-fable-5-2",
+      "provider": "anthropic",
+      "tokens": { "input": 16, "cachedInput": 390873, "cacheWrite": 75116, "output": 8933 },
+      "usd": 1.64
+    }
+  ]
+}
