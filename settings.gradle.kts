@@ -11,10 +11,22 @@ dependencyResolutionManagement {
     }
 }
 
-include("api", "bridge", "loader", "mixin", "agent", "example", "liquidbounce")
+include("api", "example")
 
-// One module per mod framework; a new one also needs its line in agent/build.gradle.kts.
+// What goes into the game: agent builds modloader.jar, with the others under its lib/.
+for (module in listOf("agent", "bridge", "loader", "mixin")) {
+    include(module)
+    project(":$module").projectDir = file("game/$module")
+}
+
+// One module per mod framework; a new one also needs its line in game/agent/build.gradle.kts.
 for (framework in listOf("fabric", "quilt", "neoforge", "forge")) {
     include(framework)
-    project(":$framework").projectDir = file("framework/$framework")
+    project(":$framework").projectDir = file("game/framework/$framework")
+}
+
+// Mods that let existing builds of a client run when a launcher loads them into a running game.
+for (client in listOf("liquidbounce")) {
+    include(client)
+    project(":$client").projectDir = file("compat/$client")
 }

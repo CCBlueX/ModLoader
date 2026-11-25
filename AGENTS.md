@@ -2,23 +2,27 @@
 
 Minecraft 26.3+ (Mojang names, unobfuscated), Java 25. Root package `net.ccbluex.modloader`.
 
+`game/` is what goes into the game, `attach/` what reaches it from outside, `compat/` the mods that make existing
+client builds work when loaded this way. Gradle project names are the module names (`:loader`, `:fabric`,
+`:liquidbounce`); `settings.gradle.kts` maps them to their folders.
+
 | Module | Runs in | Holds |
 |---|---|---|
-| `rust/` | a launcher's process, or its own as the command line tool (crate `modloader`; the program needs feature `cli`) | `ModLoader` (the typed requests), finding games (`Jvm`), HotSpot's attach protocol (`attach.rs`, `attach/unix.rs`, `attach/windows.rs`); `main.rs` is the tool |
-| `agent/` | the game's system class loader | `Agent`, the entry of `modloader.jar`, built here with the modules below under `lib/`; the tests of the whole |
-| `bridge/` | the game's bootstrap class path | `Bridge.link`, the bootstrap method of every call the compiler writes into a class |
-| `loader/` | a class loader below the game's | `ModLoader` (the commands), `Mod`, `ModClassLoader`, `Game` (what the game says about itself), the `Framework` and `ModFile` contract; in `mixin`: `MixinManager` (redefines and reverts), `Linker` (links the Bridge calls), the `MixinCompiler` contract |
+| `attach/` | a launcher's process, or its own as the command line tool (crate `modloader`; the program needs feature `cli`) | `ModLoader` (the typed requests), finding games (`Jvm`), HotSpot's attach protocol (`attach.rs`, `attach/unix.rs`, `attach/windows.rs`); `main.rs` is the tool |
+| `game/agent/` | the game's system class loader | `Agent`, the entry of `modloader.jar`, built here with the modules below under `lib/`; the tests of the whole |
+| `game/bridge/` | the game's bootstrap class path | `Bridge.link`, the bootstrap method of every call the compiler writes into a class |
+| `game/loader/` | a class loader below the game's | `ModLoader` (the commands), `Mod`, `ModClassLoader`, `Game` (what the game says about itself), the `Framework` and `ModFile` contract; in `mixin`: `MixinManager` (redefines and reverts), `Linker` (links the Bridge calls), the `MixinCompiler` contract |
 | `api/` | same | what mods compile against |
-| `framework/<name>/` | same | one `Framework` and `ModFile` per mod framework, found through `META-INF/services` |
-| `mixin/` | a `CompilerClassLoader`, new for every compilation, with the bundled Mixin, MixinExtras and ASM | `Compiler`: `MixinSession` runs Mixin, `Outliner` splits a mixed class into redefinition and companion, `Rewriter` hands instructions to `Linker` |
+| `game/framework/<name>/` | same | one `Framework` and `ModFile` per mod framework, found through `META-INF/services` |
+| `game/mixin/` | a `CompilerClassLoader`, new for every compilation, with the bundled Mixin, MixinExtras and ASM | `Compiler`: `MixinSession` runs Mixin, `Outliner` splits a mixed class into redefinition and companion, `Rewriter` hands instructions to `Linker` |
 | `example/` | a mod class loader | a mod with an entrypoint for every framework and a mixin; the tests load it |
-| `liquidbounce/` | a mod class loader, as the first jar of a launcher's load | the Fabric mod `modloader-liquidbounce`, which lets unchanged LiquidBounce builds run when loaded this way |
+| `compat/liquidbounce/` | a mod class loader, as the first jar of a launcher's load | the Fabric mod `modloader-liquidbounce`, which lets unchanged LiquidBounce builds run when loaded this way |
 
-A new framework is a module under `framework/`, its name in `settings.gradle.kts` and its `runtime(...)` line in
-`agent/build.gradle.kts`.
+A new framework is a module under `game/framework/`, its name in `settings.gradle.kts` and its `runtime(...)` line in
+`game/agent/build.gradle.kts`. A new compat mod is a module under `compat/` and its name in `settings.gradle.kts`.
 
 The version is one number in two places that change together: `modloaderVersion` (the default in the root
-`build.gradle.kts`, with `-SNAPSHOT`) and `version` in `rust/Cargo.toml` (without). A tag `v0.1.0` makes CI build
+`build.gradle.kts`, with `-SNAPSHOT`) and `version` in `attach/Cargo.toml` (without). A tag `v0.1.0` makes CI build
 with `-PmodloaderVersion=0.1.0` and publish to Maven's releases; `main` publishes the default to snapshots. A module
 that publishes applies `maven-publish` and declares one publication `maven` with its `artifactId`; the repository
 and the POM come from the root script. `agent` publishes its jar alone, without the `java` component, so the POM of
@@ -30,19 +34,19 @@ cannot take are in `docs/how-it-works.md`; a changed behavior or limit is writte
 ## Commands
 
 ```sh
-flock /tmp/modloader-gradle.lock ./gradlew build   # Java and, through cargo, rust/; runs the Java tests
-(cd rust && cargo test --all-features && cargo clippy --all-features --all-targets)
+flock /tmp/modloader-gradle.lock ./gradlew build   # Java and, through cargo, attach/; runs the Java tests
+(cd attach && cargo test --all-features && cargo clippy --all-features --all-targets)
 ```
 
-`agent`'s tests run the built program with the jar beside it (`agent/build/dist`) against a stand-in game:
-`agent/src/test/java/net/minecraft` is that game, `agent/src/mod` the mod with mixins they load,
-`agent/src/widened` what that mod compiles against in place of an access widener. CI runs them on Linux, macOS and
-Windows, the only place the code of the other two systems runs. Here it only compiles:
+`agent`'s tests run the built program with the jar beside it (`game/agent/build/dist`) against a stand-in game:
+`game/agent/src/test/java/net/minecraft` is that game, `game/agent/src/mod` the mod with mixins they load,
+`game/agent/src/widened` what that mod compiles against in place of an access widener. CI runs them on Linux, macOS
+and Windows, the only place the code of the other two systems runs. Here it only compiles:
 `cargo clippy --all-features --target x86_64-pc-windows-gnu` and `--target aarch64-apple-darwin`.
 
 Against real games: install 26.3 dedicated servers (vanilla `server.jar`, Fabric server launcher, NeoForge and Forge
 installers with `--installServer`), start each with `-Xmx` and `eula=true`, then
-`agent/build/dist/modloader load example/build/libs/example-0.1.0-SNAPSHOT.jar --pid <pid>` and read the server
+`game/agent/build/dist/modloader load example/build/libs/example-0.1.0-SNAPSHOT.jar --pid <pid>` and read the server
 console for the `[example]` lines; the mixin prints one every 100 ticks until `unload example`. Always pass `--pid`
 on a shared machine: without it the program takes any Java process whose command line names minecraft, fabric,
 quilt or forge, another session's game test included.
@@ -51,10 +55,10 @@ quilt or forge, another session's game test included.
 
 - The game loads `Agent` and `Bridge` once and keeps them; everything else under `lib/` is loaded again when
   `modloader.jar` changes (`Agent.loaderVersion`). A change to either needs a game restart. `Agent`'s request
-  (answer file, jar, the loader's request, one per line; written by `ModLoader::request` in `rust/src/lib.rs`) and
+  (answer file, jar, the loader's request, one per line; written by `ModLoader::request` in `attach/src/lib.rs`) and
   `Bridge`'s one method and one field have to stay as an older copy has them.
 - The loader's request and answers are JSON: the records at the top of the Java `ModLoader` and the serde types in
-  `rust/src/lib.rs` change together. `Agent` has no Gson; when the loader cannot start, it answers plain text, which
+  `attach/src/lib.rs` change together. `Agent` has no Gson; when the loader cannot start, it answers plain text, which
   the crate reports as `Error::Refused`. A launcher pairs its crate with the newest agent on Maven of the same
   major.minor, so within one a request keeps its fields and their meaning and an answer only gains fields; anything
   else is a new minor in both places.

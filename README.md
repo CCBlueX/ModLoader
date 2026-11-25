@@ -10,7 +10,7 @@ Minecraft 26.3 and later, Java 25.
 
 Take `modloader.jar` from the [releases](https://github.com/CCBlueX/ModLoader/releases); `snapshot` there is the
 newest build of `main`. It is the agent that goes into the game, with the loader inside. The Rust crate in
-[rust](rust) puts it there: a library for launchers, and a command line tool built from it. Neither starts a Java of
+[attach](attach) puts it there: a library for launchers, and a command line tool built from it. Neither starts a Java of
 its own: the game's JVM runs the agent.
 
 ### In a launcher
@@ -20,23 +20,24 @@ modloader = { git = "https://github.com/CCBlueX/ModLoader" }
 ```
 
 ```rust
-use modloader::ModLoader;
+use modloader::{Jvm, ModLoader};
 
+// A game the launcher started, or one already running.
+let pid = Jvm::all().into_iter().find(Jvm::is_minecraft).unwrap().pid;
+// net.ccbluex:modloader from maven.ccbluex.net, the newest with the major.minor of modloader::VERSION
 let loader = ModLoader::new(pid, "modloader.jar");
-let game = loader.game()?;      // version, directory, frameworks, is_client
+
+let game = loader.game()?; // version, directory, frameworks, is_client
+
+// The jars start together, as at the game's start; the properties are set first, as -D does.
 let loaded = loader.load(&["mods/library.jar", "mods/mymod.jar"], &[("mymod.folder", "/data/mymod")])?;
-let mods = loader.mods()?;      // what was loaded this way
+loaded.mods;    // loaded now
+loaded.present; // the game had them already
+loaded.notes;   // what the user should know
+
+loader.mods()?; // what was loaded this way
 loader.unload("mymod")?;
 ```
-
-`pid` is the game's process: one the launcher started, or one of `Jvm::all()`, the running Java processes, for a
-game it did not start. One `load` takes all jars that belong together and returns the ones it loaded (`mods`), the
-ones the game already had (`present`) and what the user should know (`notes`). The pairs are set as system
-properties in the game before any of the mods runs, as `-D` does at launch. Every call blocks until the game has
-answered.
-
-The agent is also on Maven as `net.ccbluex:modloader`, in `https://maven.ccbluex.net/releases` and, for builds of
-`main`, `/snapshots`. The one for a crate is the newest whose major.minor is that of `modloader::VERSION`.
 
 ### On the command line
 
@@ -45,22 +46,13 @@ Take the `modloader-…` program for your system from the same release and keep 
 macOS):
 
 ```sh
-./modloader load mymod.jar another.jar
+./modloader load mymod.jar another.jar          # together: one that cannot load keeps all out
 ./modloader load -D mymod.folder=/data/mymod mymod.jar
-./modloader game
+./modloader game                                # version, frameworks, directory
 ./modloader list
 ./modloader unload mymod
+./modloader --pid 4242 list                     # when several games run, or one started as server.jar
 ```
-
-The game is found by its command line. `--pid <pid>` names it when several run, or when it was started as a plain
-`server.jar`.
-
-The jars of one `load` go in together, as the mods of a game start: they may depend on each other, and when one of
-them cannot load, none does. `-D key=value` sets a system property in the game before they start. `game` prints the
-game's Minecraft version, its mod frameworks and its directory.
-
-A mod loads once: when the game's framework or an earlier `load` already has its id, `load` says so and leaves that
-jar out.
 
 [How it works](docs/how-it-works.md) has the rest:
 
@@ -113,7 +105,7 @@ game exits.
 With JDK 25 and Rust installed:
 
 ```sh
-./gradlew build   # agent/build/dist: modloader and modloader.jar
+./gradlew build   # game/agent/build/dist: modloader and modloader.jar
 ```
 
 ## Agent usage

@@ -46,7 +46,7 @@ jobs:
         # The tests attach the command line tool to a JVM, which every system does its own way.
         run: ./gradlew build
       - name: Test the Rust crate
-        working-directory: rust
+        working-directory: attach
         run: cargo test --locked --all-features
       - name: AI usage files and tags
         if: runner.os == 'Linux'
@@ -57,9 +57,9 @@ jobs:
       - name: Collect the release files
         run: |
           mkdir release
-          cp agent/build/dist/modloader${{ runner.os == 'Windows' && '.exe' || '' }} release/${{ matrix.program }}
+          cp game/agent/build/dist/modloader${{ runner.os == 'Windows' && '.exe' || '' }} release/${{ matrix.program }}
           if [ "$RUNNER_OS" = Linux ]; then
-            cp agent/build/dist/modloader.jar api/build/libs/modloader-api.jar release/
+            cp game/agent/build/dist/modloader.jar api/build/libs/modloader-api.jar release/
           fi
       - uses: actions/upload-artifact@v7
         with:

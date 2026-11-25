@@ -65,16 +65,16 @@ val modJar = tasks.register<Jar>("modJar") {
     from(mod.output)
 }
 
-// The command line tool of the Rust crate in rust/, which looks for modloader.jar beside itself.
+// The command line tool of the Rust crate in attach/, which looks for modloader.jar beside itself.
 val cli = tasks.register<Exec>("cli") {
-    workingDir = rootProject.file("rust")
+    workingDir = rootProject.file("attach")
     commandLine("cargo", "build", "--release", "--locked", "--features", "cli")
 }
 
 val dist = tasks.register<Sync>("dist") {
     dependsOn(cli)
     from(tasks.jar)
-    from(rootProject.file("rust/target/release")) { include("modloader", "modloader.exe") }
+    from(rootProject.file("attach/target/release")) { include("modloader", "modloader.exe") }
     into(layout.buildDirectory.dir("dist"))
 }
 
