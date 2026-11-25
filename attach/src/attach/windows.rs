@@ -27,8 +27,11 @@ use windows_sys::Win32::System::Threading::{
     PROCESS_VM_OPERATION, PROCESS_VM_READ, PROCESS_VM_WRITE, WaitForSingleObject,
 };
 
+use crate::namespace::Namespace;
+
 /// @agent claude-fable-5-2
-pub fn connect(pid: u32) -> io::Result<File> {
+pub fn connect(game: &Namespace) -> io::Result<File> {
+    let pid = game.host();
     let access =
         PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE;
     let process = owned(unsafe { OpenProcess(access, 0, pid) })?;

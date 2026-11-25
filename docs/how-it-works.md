@@ -34,6 +34,18 @@ One `load` takes one jar or many and treats them as the mods of one game start:
 
 Mods bundled in a jar unload together with it.
 
+### A game in a sandbox
+
+A game under Flatpak or in a container has another process id, its own `/tmp` and other files than the launcher.
+The crate reaches it through `/proc/<pid>/root`, as the JDK's own tools do, and copies the agent and every jar the
+game does not have into `.modloader/attach` in the game's directory. A folder a property names is not copied:
+
+```rust
+if loader.can_see("/data/mymod") {
+    // the game has this folder too
+}
+```
+
 ## What runs
 
 | In the mod | Runs in a game with |

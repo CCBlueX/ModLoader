@@ -9,15 +9,20 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use libc::{SIGQUIT, geteuid, kill, pid_t};
+
+use crate::namespace::Namespace;
+
 /// @agent claude-fable-5-2
-pub fn connect(pid: u32) -> io::Result<UnixStream> {
-    let directory = temp_directory();
+pub fn connect(game: &Namespace) -> io::Result<UnixStream> {
+    let (host, pid) = (game.host(), game.pid());
+    let directory = game.tmp().unwrap_or_else(temp_directory);
     let socket = directory.join(format!(".java_pid{pid}"));
     if !socket.exists() {
-        check_handles_quit(pid)?;
+        check_handles_quit(host)?;
         let trigger = directory.join(format!(".attach_pid{pid}"));
         File::create(&trigger)?;
-        let opened = if unsafe { libc::kill(pid as libc::pid_t, libc::SIGQUIT) } == 0 {
+        let opened = if unsafe { kill(host as pid_t, SIGQUIT) } == 0 {
             // The JDK's own tools give the JVM this long.
             let deadline = Instant::now() + Duration::from_secs(10);
             while !socket.exists() && Instant::now() < deadline {
@@ -31,13 +36,13 @@ pub fn connect(pid: u32) -> io::Result<UnixStream> {
         opened?;
         if !socket.exists() {
             return Err(io::Error::other(format!(
-                "process {pid} did not open {}; it is no JVM, or one started with -XX:+DisableAttachMechanism",
+                "process {host} did not open {}; it is no JVM, or one started with -XX:+DisableAttachMechanism",
                 socket.display()
             )));
         }
     }
     // The directory is shared, so the name alone proves nothing.
-    if fs::metadata(&socket)?.uid() != unsafe { libc::geteuid() } {
+    if fs::metadata(&socket)?.uid() != unsafe { geteuid() } {
         return Err(io::Error::other(format!(
             "{} belongs to another user",
             socket.display()
@@ -58,7 +63,7 @@ fn check_handles_quit(pid: u32) -> io::Result<()> {
         .find_map(|line| line.strip_prefix("SigCgt:"))
         .and_then(|mask| u64::from_str_radix(mask.trim(), 16).ok())
         .unwrap_or(0);
-    if caught & (1 << (libc::SIGQUIT - 1)) == 0 {
+    if caught & (1 << (SIGQUIT - 1)) == 0 {
         return Err(io::Error::other(format!(
             "process {pid} is no JVM that takes attach requests"
         )));
@@ -80,8 +85,10 @@ fn temp_directory() -> PathBuf {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
 
-    let mut path = vec![0u8; libc::PATH_MAX as usize];
-    let length = unsafe { libc::confstr(libc::_CS_DARWIN_USER_TEMP_DIR, path.as_mut_ptr().cast(), path.len()) };
+    use libc::{_CS_DARWIN_USER_TEMP_DIR, PATH_MAX, confstr};
+
+    let mut path = vec![0u8; PATH_MAX as usize];
+    let length = unsafe { confstr(_CS_DARWIN_USER_TEMP_DIR, path.as_mut_ptr().cast(), path.len()) };
     if length == 0 || length > path.len() {
         return PathBuf::from("/tmp");
     }

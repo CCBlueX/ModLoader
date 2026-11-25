@@ -19,15 +19,19 @@
 //! ```
 
 mod attach;
+mod namespace;
 
 use std::collections::HashMap;
-use std::path::{self, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::{fmt, fs, io};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Value, from_str, json};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+use thiserror::Error;
+
+use crate::namespace::Namespace;
 
 /// The crate's version; an agent jar fits when its major.minor is the same.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -35,7 +39,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Why a request did not go through.
 ///
 /// @agent claude-fable-5-2
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error)]
 pub enum Error {
     /// The game's JVM could not be reached or did not run the agent.
     #[error(transparent)]
@@ -106,13 +110,19 @@ impl ModLoader {
         self.request(json!({ "command": "instance" }))
     }
 
+    /// Whether the game has the existing `path` as this process does. Under Flatpak or in a container it may not:
+    /// jars are copied for it, but a folder a property names has to be one it has.
+    pub fn can_see(&self, path: impl AsRef<Path>) -> bool {
+        Namespace::of(self.pid).sees(path.as_ref())
+    }
+
     /// Loads the jars together, as the mods of one game start, and sets `properties` as system properties of the
     /// game's JVM before anything of them runs. A jar that is no mod refuses the whole load.
     pub fn load<P: AsRef<Path>>(&self, jars: &[P], properties: &[(&str, &str)]) -> Result<Loaded, Error> {
-        // The game opens the jars, from its own working directory.
+        let game = Namespace::of(self.pid);
         let items = jars
             .iter()
-            .map(|jar| path::absolute(jar).and_then(|jar| utf8(&jar).map(str::to_owned)))
+            .map(|jar| game.share(jar.as_ref()).and_then(|jar| utf8(&jar).map(str::to_owned)))
             .collect::<io::Result<Vec<String>>>()?;
         let properties: HashMap<&str, &str> = properties.iter().copied().collect();
         self.request(json!({ "command": "load", "items": items, "properties": properties }))
@@ -139,14 +149,13 @@ impl ModLoader {
     }
 
     fn request<T: DeserializeOwned>(&self, request: Value) -> Result<T, Error> {
-        let answer = tempfile::Builder::new()
-            .prefix("modloader-")
-            .tempfile()?
-            .into_temp_path();
-        let agent = utf8(&self.agent)?;
+        let game = Namespace::of(self.pid);
+        let (answer, answer_in_game) = game.exchange()?;
+        let agent = game.share(&self.agent)?;
+        let agent = utf8(&agent)?;
         // Read by Agent.agentmain: where the answer goes, its own jar, then the loader's request.
-        let options = format!("{}\n{agent}\n{request}", utf8(&answer)?);
-        attach::load_agent(self.pid, agent, &options)?;
+        let options = format!("{}\n{agent}\n{request}", utf8(&answer_in_game)?);
+        attach::load_agent(&game, agent, &options)?;
         parse(&fs::read_to_string(&answer)?)
     }
 }
@@ -161,7 +170,7 @@ fn parse<T: DeserializeOwned>(answer: &str) -> Result<T, Error> {
         Refusal { error: String },
         Done(T),
     }
-    match serde_json::from_str(answer) {
+    match from_str(answer) {
         Ok(Answer::Done(done)) => Ok(done),
         Ok(Answer::Refusal { error }) => Err(Error::Refused(error)),
         Err(_) => Err(Error::Refused(answer.to_string())),

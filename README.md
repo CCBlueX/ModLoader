@@ -63,6 +63,7 @@ macOS):
 3. [What a running game cannot take from a mod](docs/how-it-works.md#what-a-running-game-cannot-take-from-a-mod):
    registry content, assets and data, and some mixins.
 4. [Unload](docs/how-it-works.md#unload): which mods can be taken out of the game again.
+5. [A game in a sandbox](docs/how-it-works.md#a-game-in-a-sandbox): Flatpak and containers.
 
 ## API
 

@@ -8,7 +8,7 @@ client builds work when loaded this way. Gradle project names are the module nam
 
 | Module | Runs in | Holds |
 |---|---|---|
-| `attach/` | a launcher's process, or its own as the command line tool (crate `modloader`; the program needs feature `cli`) | `ModLoader` (the typed requests), finding games (`Jvm`), HotSpot's attach protocol (`attach.rs`, `attach/unix.rs`, `attach/windows.rs`); `main.rs` is the tool |
+| `attach/` | a launcher's process, or its own as the command line tool (crate `modloader`; the program needs feature `cli`) | `ModLoader` (the typed requests), finding games (`Jvm`), HotSpot's attach protocol (`attach.rs`, `attach/unix.rs`, `attach/windows.rs`), a game's Linux namespaces (`namespace.rs`); `main.rs` is the tool |
 | `game/agent/` | the game's system class loader | `Agent`, the entry of `modloader.jar`, built here with the modules below under `lib/`; the tests of the whole |
 | `game/bridge/` | the game's bootstrap class path | `Bridge.link`, the bootstrap method of every call the compiler writes into a class |
 | `game/loader/` | a class loader below the game's | `ModLoader` (the commands), `Mod`, `ModClassLoader`, `Instance` (what the instance says about itself), the `Framework` and `ModFile` contract; in `mixin`: `MixinManager` (redefines and reverts), `Linker` (links the Bridge calls), the `MixinCompiler` contract |
@@ -84,6 +84,10 @@ quilt or forge, another session's game test included.
   address there plus the function's offset in a mapping of the same file here. Protocol 1 would need machine code
   written into the JVM.
 - On Linux `check_handles_quit` reads the process's caught signals first: SIGQUIT ends a process that is no JVM.
+- A game under Flatpak or in a container is in other namespaces. `Namespace` takes the JVM's own process id
+  (`NSpid`) for the socket in the game's `/tmp` (`/proc/<pid>/root/tmp`), and `share` copies what the game does not
+  have at the same path into `.modloader/attach` under its working directory. The Gradle tests do not cover it:
+  run the game in one container and the tool in another started with `--pid=host`.
 - Adapter classes load in every game, also one without their framework. Calls into the framework are fine in methods
   the loader only calls when it is present (`isLoaded`, `start`, `stop`). Code that passes one framework type as
   another (`FMLModContainer` as `ModContainer`) makes the verifier load both, so it lives in a class of its own

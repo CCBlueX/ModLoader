@@ -1,0 +1,13 @@
+{
+  "date": "2026-11-25",
+  "change": "fix: attach to sandboxed games",
+  "tool": "omp",
+  "models": [
+    {
+      "model": "claude-fable-5-2",
+      "provider": "anthropic",
+      "tokens": { "input": 184, "cachedInput": 31936720, "cacheWrite": 314350, "output": 164628 },
+      "usd": 18.00
+    }
+  ]
+}

@@ -10,11 +10,13 @@ mod os;
 
 use std::io::{self, Read, Write};
 
+use crate::namespace::Namespace;
+
 /// Loads a Java agent into the JVM, as `VirtualMachine.loadAgent` of the JDK does.
 ///
 /// @agent claude-fable-5-2
-pub fn load_agent(pid: u32, jar: &str, options: &str) -> io::Result<()> {
-    let mut jvm = os::connect(pid)?;
+pub fn load_agent(game: &Namespace, jar: &str, options: &str) -> io::Result<()> {
+    let mut jvm = os::connect(game)?;
     jvm.write_all(&request("load", &["instrument", "false", &format!("{jar}={options}")]))?;
     let mut reply = Vec::new();
     jvm.read_to_end(&mut reply)?;
