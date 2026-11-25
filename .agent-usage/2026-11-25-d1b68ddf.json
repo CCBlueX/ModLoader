@@ -1,0 +1,13 @@
+{
+  "date": "2026-11-25",
+  "change": "feat: liquidbounce library",
+  "tool": "omp",
+  "models": [
+    {
+      "model": "claude-fable-5-2",
+      "provider": "anthropic",
+      "tokens": { "input": 54, "cachedInput": 2617726, "cacheWrite": 109376, "output": 39749 },
+      "usd": 3.86
+    }
+  ]
+}

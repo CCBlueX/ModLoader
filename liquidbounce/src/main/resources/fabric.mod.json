@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "modloader-liquidbounce",
+  "version": "${version}",
+  "name": "ModLoader for LiquidBounce",
+  "environment": "client",
+  "entrypoints": {
+    "main": ["net.ccbluex.modloader.liquidbounce.FabricEntrypoint"]
+  }
+}

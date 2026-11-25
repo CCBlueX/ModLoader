@@ -11,7 +11,7 @@ dependencyResolutionManagement {
     }
 }
 
-include("api", "bridge", "loader", "mixin", "agent", "example")
+include("api", "bridge", "loader", "mixin", "agent", "example", "liquidbounce")
 
 // One module per mod framework; a new one also needs its line in agent/build.gradle.kts.
 for (framework in listOf("fabric", "quilt", "neoforge", "forge")) {

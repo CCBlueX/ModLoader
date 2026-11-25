@@ -12,6 +12,7 @@ Minecraft 26.3+ (Mojang names, unobfuscated), Java 25. Root package `net.ccbluex
 | `framework/<name>/` | same | one `Framework` and `ModFile` per mod framework, found through `META-INF/services` |
 | `mixin/` | a `CompilerClassLoader`, new for every compilation, with the bundled Mixin, MixinExtras and ASM | `Compiler`: `MixinSession` runs Mixin, `Outliner` splits a mixed class into redefinition and companion, `Rewriter` hands instructions to `Linker` |
 | `example/` | a mod class loader | a mod with an entrypoint for every framework and a mixin; the tests load it |
+| `liquidbounce/` | a mod class loader, as the first jar of a launcher's load | the Fabric mod `modloader-liquidbounce`, which lets unchanged LiquidBounce builds run when loaded this way |
 
 A new framework is a module under `framework/`, its name in `settings.gradle.kts` and its `runtime(...)` line in
 `agent/build.gradle.kts`.
@@ -200,6 +201,9 @@ Mixins:
 - `MixinManager.compile` is slow and runs on the attach thread; `apply` (the redefinition) and the mod's start run
   in one task on the client thread while the singleplayer server waits (`ModLoader.runOnGameThread`). A mod's
   handlers running before its start crashed LiquidBounce in a world. A dedicated server keeps ticking meanwhile.
+- `LateStart` turns LiquidBounce's automatic GUI scale into 2 on the option's value itself: the client's mixin
+  does it through `OptionInstance.set`, whose validation asks `Window.calculateScale` once the game runs, and
+  Legacy4J's hook there reads the option again (`StackOverflowError`).
 - The game's Mixin named merged handlers, unique methods and fields after counters of its own run;
   `Outliner.rename` gives ours the loaded names, or every class the framework mixed would look changed.
 - `Rewriter` writes a call kind (named after the instruction it replaces) and `Linker` links it: change them
