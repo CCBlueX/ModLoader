@@ -39,24 +39,27 @@ final class ModContainers {
     static void add(Path jar, ClassLoader classes) throws ReflectiveOperationException, IOException {
         FabricLoaderImpl loader = FabricLoaderImpl.INSTANCE;
         LoaderModMetadata metadata;
-        try (JarFile file = new JarFile(jar.toFile()); InputStream in = file.getInputStream(file.getEntry("fabric.mod.json"))) {
+        try (JarFile file = new JarFile(jar.toFile());
+                InputStream in = file.getInputStream(file.getEntry("fabric.mod.json"))) {
             metadata = ModMetadataParser.parseMetadata(in, jar.toString(), List.of(), new VersionOverrides(),
                     new DependencyOverrides(loader.getConfigDir()), loader.isDevelopmentEnvironment());
         } catch (ParseMetadataException e) {
             throw new IllegalArgumentException(e.getMessage(), e);
         }
-        Method createPlain = ModCandidateImpl.class.getDeclaredMethod("createPlain", List.class, LoaderModMetadata.class, boolean.class, Collection.class);
+        Method createPlain = ModCandidateImpl.class.getDeclaredMethod(
+                "createPlain", List.class, LoaderModMetadata.class, boolean.class, Collection.class);
         createPlain.setAccessible(true);
         addMod(createPlain.invoke(null, List.of(jar), metadata, false, List.of()));
 
         Object container = loader.getModContainer(metadata.getId()).orElseThrow();
-        Object storage = entrypoints(loader);
-        Method addEntrypoint = storage.getClass().getDeclaredMethod("add", ModContainerImpl.class, String.class, EntrypointMetadata.class, Map.class);
+        Object storage = field("entrypointStorage").get(loader);
+        Method addEntrypoint = storage.getClass().getDeclaredMethod(
+                "add", ModContainerImpl.class, String.class, EntrypointMetadata.class, Map.class);
         addEntrypoint.setAccessible(true);
         // Fabric's Java and Kotlin adapters would go through Knot; other languages still do.
-        Field adapterMap = FabricLoaderImpl.class.getDeclaredField("adapterMap");
-        adapterMap.setAccessible(true);
-        Map<String, LanguageAdapter> adapters = new HashMap<>((Map<String, LanguageAdapter>) adapterMap.get(loader));
+        @SuppressWarnings("unchecked")
+        Map<String, LanguageAdapter> adapters =
+                new HashMap<>((Map<String, LanguageAdapter>) field("adapterMap").get(loader));
         adapters.put("default", new ClassLoaderAdapter(classes, false));
         adapters.put("kotlin", new ClassLoaderAdapter(classes, true));
         for (String key : metadata.getEntrypointKeys()) {
@@ -68,9 +71,11 @@ final class ModContainers {
 
     /** Adds a mod of the game or the JVM, which has no jar of its own. */
     static void add(BuiltinMod mod) throws ReflectiveOperationException {
-        Method createBuiltin = ModCandidateImpl.class.getDeclaredMethod("createBuiltin", BuiltinMod.class, VersionOverrides.class, DependencyOverrides.class);
+        Method createBuiltin = ModCandidateImpl.class.getDeclaredMethod(
+                "createBuiltin", BuiltinMod.class, VersionOverrides.class, DependencyOverrides.class);
         createBuiltin.setAccessible(true);
-        addMod(createBuiltin.invoke(null, mod, new VersionOverrides(), new DependencyOverrides(FabricLoaderImpl.INSTANCE.getConfigDir())));
+        addMod(createBuiltin.invoke(null, mod, new VersionOverrides(),
+                new DependencyOverrides(FabricLoaderImpl.INSTANCE.getConfigDir())));
     }
 
     private static void addMod(Object candidate) throws ReflectiveOperationException {
@@ -81,24 +86,25 @@ final class ModContainers {
 
     static void remove(String id) {
         try {
-            Field byId = FabricLoaderImpl.class.getDeclaredField("modMap");
-            Field all = FabricLoaderImpl.class.getDeclaredField("mods");
-            byId.setAccessible(true);
-            all.setAccessible(true);
-            Object container = ((Map<?, ?>) byId.get(FabricLoaderImpl.INSTANCE)).get(id);
+            FabricLoaderImpl loader = FabricLoaderImpl.INSTANCE;
+            Map<?, ?> byId = (Map<?, ?>) field("modMap").get(loader);
+            Field all = field("mods");
+            Object container = byId.get(id);
             if (container == null) {
                 return;
             }
             // The map also has the container under every id the mod provides.
-            ((Map<?, ?>) byId.get(FabricLoaderImpl.INSTANCE)).values().removeIf(other -> other == container);
-            ((List<?>) all.get(FabricLoaderImpl.INSTANCE)).remove(container);
+            byId.values().removeIf(other -> other == container);
+            ((List<?>) all.get(loader)).remove(container);
 
-            Object storage = entrypoints(FabricLoaderImpl.INSTANCE);
+            Object storage = field("entrypointStorage").get(loader);
             Field byKey = storage.getClass().getDeclaredField("entryMap");
             byKey.setAccessible(true);
-            Method owner = Class.forName(storage.getClass().getName() + "$Entry", false, storage.getClass().getClassLoader())
+            Method owner = Class
+                    .forName(storage.getClass().getName() + "$Entry", false, storage.getClass().getClassLoader())
                     .getDeclaredMethod("getModContainer");
             owner.setAccessible(true);
+            @SuppressWarnings("unchecked")
             Map<?, ? extends List<?>> entries = (Map<?, ? extends List<?>>) byKey.get(storage);
             for (List<?> entrypoints : entries.values()) {
                 for (Object entrypoint : List.copyOf(entrypoints)) {
@@ -114,9 +120,9 @@ final class ModContainers {
         }
     }
 
-    private static Object entrypoints(FabricLoaderImpl loader) throws ReflectiveOperationException {
-        Field storage = FabricLoaderImpl.class.getDeclaredField("entrypointStorage");
-        storage.setAccessible(true);
-        return storage.get(loader);
+    private static Field field(String name) throws NoSuchFieldException {
+        Field field = FabricLoaderImpl.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return field;
     }
 }

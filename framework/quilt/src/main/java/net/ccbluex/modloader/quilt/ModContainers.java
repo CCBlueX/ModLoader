@@ -36,7 +36,8 @@ final class ModContainers {
     /** Adds the mod and every entrypoint it declares, created from {@code classes}. */
     static ModContainerExt add(Path jar, ClassLoader classes) throws IOException {
         ModMetadataExt metadata;
-        try (JarFile file = new JarFile(jar.toFile()); InputStream in = file.getInputStream(file.getEntry("fabric.mod.json"))) {
+        try (JarFile file = new JarFile(jar.toFile());
+                InputStream in = file.getInputStream(file.getEntry("fabric.mod.json"))) {
             metadata = FabricModMetadataReader.parseMetadata(in).asQuiltModMetadata();
         } catch (ParseMetadataException e) {
             throw new IllegalArgumentException(e.getMessage(), e);
@@ -49,13 +50,16 @@ final class ModContainers {
             addMod.invoke(loader, container);
 
             // Quilt's adapters for Java and Kotlin would go through Knot; other languages still do.
-            Map<String, LanguageAdapter> adapters = new HashMap<>((Map<String, LanguageAdapter>) field("adapterMap").get(loader));
+            @SuppressWarnings("unchecked")
+            Map<String, LanguageAdapter> adapters =
+                    new HashMap<>((Map<String, LanguageAdapter>) field("adapterMap").get(loader));
             adapters.put("default", new ClassLoaderAdapter(classes, false));
             adapters.put("kotlin", new ClassLoaderAdapter(classes, true));
             EntrypointStorage storage = (EntrypointStorage) field("entrypointStorage").get(loader);
-            for (Map.Entry<String, Collection<ModMetadataExt.ModEntrypoint>> key : metadata.getEntrypoints().entrySet()) {
-                for (ModMetadataExt.ModEntrypoint entrypoint : key.getValue()) {
-                    storage.add(container, key.getKey(), entrypoint, adapters);
+            Map<String, Collection<ModMetadataExt.ModEntrypoint>> entrypoints = metadata.getEntrypoints();
+            for (Map.Entry<String, Collection<ModMetadataExt.ModEntrypoint>> entry : entrypoints.entrySet()) {
+                for (ModMetadataExt.ModEntrypoint entrypoint : entry.getValue()) {
+                    storage.add(container, entry.getKey(), entrypoint, adapters);
                 }
             }
         } catch (Exception e) {
@@ -85,9 +89,11 @@ final class ModContainers {
             Object storage = field("entrypointStorage").get(loader);
             Field byKey = EntrypointStorage.class.getDeclaredField("entryMap");
             byKey.setAccessible(true);
-            Method owner = Class.forName(EntrypointStorage.class.getName() + "$Entry", false, EntrypointStorage.class.getClassLoader())
+            ClassLoader quilt = EntrypointStorage.class.getClassLoader();
+            Method owner = Class.forName(EntrypointStorage.class.getName() + "$Entry", false, quilt)
                     .getDeclaredMethod("getModContainer");
             owner.setAccessible(true);
+            @SuppressWarnings("unchecked")
             Map<?, ? extends List<?>> entries = (Map<?, ? extends List<?>>) byKey.get(storage);
             for (List<?> entrypoints : entries.values()) {
                 for (Object entrypoint : List.copyOf(entrypoints)) {

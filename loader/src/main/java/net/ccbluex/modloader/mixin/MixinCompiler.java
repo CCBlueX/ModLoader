@@ -6,6 +6,7 @@ import java.util.Set;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import net.ccbluex.modloader.Framework;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Turns the mixins of the loaded mods into changes a running game accepts. Implemented by the mixin module,
@@ -17,7 +18,7 @@ import net.ccbluex.modloader.Framework;
 public interface MixinCompiler {
 
     /** @agent claude-opus-5-5 */
-    record GameConfig(String name, String mod, Integer compatibility, int order) {
+    record GameConfig(String name, @Nullable String mod, @Nullable Integer compatibility, int order) {
     }
 
     /**
@@ -32,8 +33,13 @@ public interface MixinCompiler {
      * @param classes a game class by binary name, as the game defined it; null when the game has none
      * @return by binary name, the redefinition of every class the configs change
      */
-    Map<String, Redefinition> compile(Map<String, List<String>> configs, Set<String> relaxed, List<Framework.Replacement> replacements,
-            Function<String, List<GameConfig>> gameConfigs, Function<String, byte[]> sources, Function<String, byte[]> classes,
+    Map<String, Redefinition> compile(
+            Map<String, List<String>> configs,
+            Set<String> relaxed,
+            List<Framework.Replacement> replacements,
+            Function<String, List<GameConfig>> gameConfigs,
+            Function<String, byte @Nullable []> sources,
+            Function<String, byte @Nullable []> classes,
             Predicate<String> initialized);
 
     /**
@@ -43,5 +49,5 @@ public interface MixinCompiler {
     byte[] rewrite(ClassLoader loader, byte[] modClass);
 
     /** A class Mixin generates on demand, null when it has none by that name. */
-    byte[] generate(String name);
+    byte @Nullable [] generate(String name);
 }

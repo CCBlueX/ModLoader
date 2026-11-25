@@ -10,6 +10,7 @@ import net.ccbluex.modloader.Framework;
 import net.ccbluex.modloader.ModFile;
 import net.ccbluex.modloader.TomlModFile;
 import net.minecraftforge.fml.ModList;
+import org.jspecify.annotations.Nullable;
 
 /**
  * @agent claude-fable-5-2
@@ -34,15 +35,19 @@ public final class Forge implements Framework {
 
     @Override
     public List<Replacement> replacements() {
-        Replacement screen = new Replacement("net/minecraft/client/gui/Gui", "extractRenderState", "Lnet/minecraft/client/gui/screens/Screen;extractRenderStateWithTooltipAndSubtitles(Lnet/minecraft/client/gui/GuiGraphicsExtractor;IIF)V", "Lnet/minecraft/client/gui/Gui;drawScreen(Lnet/minecraft/client/gui/GuiGraphicsExtractor;IIF)V");
+        Replacement screen = new Replacement("net/minecraft/client/gui/Gui", "extractRenderState",
+                "Lnet/minecraft/client/gui/screens/Screen;extractRenderStateWithTooltipAndSubtitles("
+                        + "Lnet/minecraft/client/gui/GuiGraphicsExtractor;IIF)V",
+                "Lnet/minecraft/client/gui/Gui;drawScreen(Lnet/minecraft/client/gui/GuiGraphicsExtractor;IIF)V");
         if (!Framework.hasClass("net.minecraftforge.client.gui.overlay.ForgeLayeredDraw")) {
             return List.of(screen);
         }
-        return List.of(screen, new Replacement("net/minecraft/client/gui/Hud", null, "extractHotbarAndDecorations", "extractItemHotbar"));
+        return List.of(screen,
+                new Replacement("net/minecraft/client/gui/Hud", null, "extractHotbarAndDecorations", "extractItemHotbar"));
     }
 
     @Override
-    public ModFile read(Path jar) throws IOException {
+    public @Nullable ModFile read(Path jar) throws IOException {
         try (JarFile file = new JarFile(jar.toFile())) {
             Config toml = TomlModFile.read(file, "META-INF/mods.toml");
             if (toml == null) {

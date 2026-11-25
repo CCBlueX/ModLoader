@@ -9,6 +9,7 @@ import net.ccbluex.modloader.Framework;
 import net.ccbluex.modloader.ModFile;
 import net.ccbluex.modloader.SharedClassLoader;
 import net.ccbluex.modloader.fabric.Fabric;
+import org.jspecify.annotations.Nullable;
 import org.quiltmc.loader.api.QuiltLoader;
 import org.quiltmc.loader.impl.launch.common.QuiltLauncherBase;
 
@@ -38,7 +39,7 @@ public final class Quilt implements Framework {
 
     /** The bytes Knot read from Quilt's transform cache, where access wideners and game patches are applied. */
     @Override
-    public byte[] preMixinClass(String name) {
+    public byte @Nullable [] preMixinClass(String name) {
         try {
             return QuiltLauncherBase.getLauncher().getClassByteArray(name, true);
         } catch (IOException e) {
@@ -66,7 +67,7 @@ public final class Quilt implements Framework {
 
     /** Fabric mods only; a quilt.mod.json is not read. */
     @Override
-    public ModFile read(Path jar) throws IOException {
+    public @Nullable ModFile read(Path jar) throws IOException {
         ModFile file = fabric.read(jar);
         return file == null ? null : new QuiltMod(this, file);
     }

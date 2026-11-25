@@ -17,6 +17,7 @@ import net.ccbluex.modloader.Framework;
 import net.ccbluex.modloader.mixin.MixinCompiler;
 import net.ccbluex.modloader.mixin.MixinCompiler.GameConfig;
 import net.ccbluex.modloader.mixin.Redefinition;
+import org.jspecify.annotations.Nullable;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
@@ -38,14 +39,21 @@ public final class Compiler implements MixinCompiler {
             Compiler.class.getClassLoader() instanceof URLClassLoader own ? own : null);
     private final ClassFiles all = new ClassFiles(Compiler.class.getClassLoader());
     private volatile Rewriter rewriter = new Rewriter(game, Set.of());
-    private volatile MixinSession session;
+    private volatile @Nullable MixinSession session;
 
     @Override
-    public Map<String, Redefinition> compile(Map<String, List<String>> configs, Set<String> relaxed, List<Framework.Replacement> replacements,
-            Function<String, List<GameConfig>> gameConfigs, Function<String, byte[]> sources, Function<String, byte[]> classes,
+    public Map<String, Redefinition> compile(
+            Map<String, List<String>> configs,
+            Set<String> relaxed,
+            List<Framework.Replacement> replacements,
+            Function<String, List<GameConfig>> gameConfigs,
+            Function<String, byte @Nullable []> sources,
+            Function<String, byte @Nullable []> classes,
             Predicate<String> initialized) {
-        MixinSession mixin = new MixinSession(sources, classes, Framework.hasClass("net.minecraft.client.Minecraft"), replacements);
-        configs.forEach((mod, names) -> names.forEach(config -> mixin.add(mod, config, relaxed.contains(mod), FabricUtil.COMPATIBILITY_LATEST)));
+        MixinSession mixin = new MixinSession(sources, classes, Framework.hasClass("net.minecraft.client.Minecraft"),
+                replacements);
+        configs.forEach((mod, names) -> names.forEach(
+                config -> mixin.add(mod, config, relaxed.contains(mod), FabricUtil.COMPATIBILITY_LATEST)));
         Set<String> targets = mixin.targets();
         // Mixins of the game's own on the same classes, as each injector has to see the others' targets.
         Map<Integer, GameConfig> applied = new TreeMap<>();
@@ -63,7 +71,10 @@ public final class Compiler implements MixinCompiler {
         for (String target : targets) {
             byte[] loaded = classes.apply(target);
             // A target the game does not have, such as a client class on a server, is left to Mixin's own rules.
-            byte[] source = loaded == null ? null : inFileOrder(target, Objects.requireNonNullElse(sources.apply(target), loaded));
+            if (loaded == null) {
+                continue;
+            }
+            byte[] source = inFileOrder(target, Objects.requireNonNullElse(sources.apply(target), loaded));
             byte[] mixed = source == null ? null : mixin.transform(target, source);
             if (mixed == null || mixed == source) {
                 continue;
@@ -72,8 +83,8 @@ public final class Compiler implements MixinCompiler {
             ClassNode mixedNode = read(mixed);
             leftOut.put(target, MixinSession.leftOut(mixedNode));
             Outliner.Outline outline = Outliner.outline(all, read(loaded), mixedNode,
-                    "net/ccbluex/modloader/generated/" + target.replace('.', '/') + "$" + stamp, mixin.isRelaxed(target),
-                    initialized.test(target));
+                    "net/ccbluex/modloader/generated/" + target.replace('.', '/') + "$" + stamp,
+                    mixin.isRelaxed(target), initialized.test(target));
             outlines.put(target, outline);
             interfaces.addAll(outline.interfaces());
         }
@@ -94,8 +105,9 @@ public final class Compiler implements MixinCompiler {
             outline.interfaces().forEach(name -> added.add(name.replace('/', '.')));
             List<String> skipped = new ArrayList<>(outline.skipped());
             skipped.addAll(leftOut.get(target));
-            redefinitions.put(target, new Redefinition(write(outline.target()), outline.companion().name.replace('/', '.'),
-                    write(outline.companion()), added, methods, outline.initializer(), outline.fields(), skipped, mixin.isRelaxed(target)));
+            redefinitions.put(target, new Redefinition(write(outline.target()),
+                    outline.companion().name.replace('/', '.'), write(outline.companion()), added, methods,
+                    outline.initializer(), outline.fields(), skipped, mixin.isRelaxed(target)));
         });
         rewriter = linked;
         session = mixin;
@@ -107,7 +119,7 @@ public final class Compiler implements MixinCompiler {
      * its own, and a selector that several methods match, such as a name with a bridge method beside it, takes the
      * first.
      */
-    private byte[] inFileOrder(String target, byte[] bytes) {
+    private byte @Nullable [] inFileOrder(String target, byte @Nullable [] bytes) {
         ClassNode file = game.get(target.replace('.', '/'));
         if (file == null) {
             return bytes;
@@ -116,7 +128,8 @@ public final class Compiler implements MixinCompiler {
         file.methods.forEach(method -> order.put(method.name + method.desc, order.size()));
         ClassNode node = new ClassNode();
         new ClassReader(bytes).accept(node, 0);
-        node.methods.sort(Comparator.comparingInt(method -> order.getOrDefault(method.name + method.desc, Integer.MAX_VALUE)));
+        node.methods.sort(Comparator.comparingInt(
+                method -> order.getOrDefault(method.name + method.desc, Integer.MAX_VALUE)));
         return write(node);
     }
 
@@ -143,7 +156,7 @@ public final class Compiler implements MixinCompiler {
      * package of the handlers that use them, which here moved to a companion in another package.
      */
     @Override
-    public byte[] generate(String name) {
+    public byte @Nullable [] generate(String name) {
         MixinSession mixin = session;
         byte[] bytes = mixin == null ? null : mixin.generate(name);
         if (bytes == null) {
@@ -153,7 +166,8 @@ public final class Compiler implements MixinCompiler {
         node.access = open(node.access);
         node.fields.forEach(field -> field.access = open(field.access));
         node.methods.forEach(method -> method.access = open(method.access));
-        node.innerClasses.stream().filter(inner -> inner.name.equals(node.name)).forEach(inner -> inner.access = open(inner.access));
+        node.innerClasses.stream().filter(inner -> inner.name.equals(node.name))
+                .forEach(inner -> inner.access = open(inner.access));
         return write(node);
     }
 

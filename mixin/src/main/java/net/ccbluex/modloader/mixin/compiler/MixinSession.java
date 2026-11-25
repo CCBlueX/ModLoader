@@ -3,6 +3,7 @@ package net.ccbluex.modloader.mixin.compiler;
 import com.llamalad7.mixinextras.MixinExtrasBootstrap;
 import com.llamalad7.mixinextras.utils.ClassGenUtils;
 import net.ccbluex.modloader.Framework;
+import org.jspecify.annotations.Nullable;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Handle;
@@ -59,12 +60,14 @@ final class MixinSession {
     private boolean transformed;
 
     /**
-     * @param classes bytes of a class by binary name ("net.minecraft.server.MinecraftServer"), null when there is none.
-     *                Asked for target classes, their superclasses and interfaces, and anything else Mixin inspects.
+     * @param classes bytes of a class by binary name ("net.minecraft.server.MinecraftServer"), null when there is
+     *                none. Asked for target classes, their superclasses and interfaces, and anything else Mixin
+     *                inspects.
      * @param client  whether the game is a client; decides Mixin's side (CLIENT or SERVER)
      * @param replacements what the game's frameworks replaced, which relaxed configs name
      */
-    MixinSession(Function<String, byte[]> sources, Function<String, byte[]> classes, boolean client, List<Framework.Replacement> replacements) {
+    MixinSession(Function<String, byte @Nullable []> sources, Function<String, byte @Nullable []> classes,
+            boolean client, List<Framework.Replacement> replacements) {
         if (MixinHost.classes != null) {
             throw new IllegalStateException("This class loader already ran a MixinSession");
         }
@@ -137,7 +140,7 @@ final class MixinSession {
         }
     }
 
-    private static void restore(Properties properties, String key, Object value) {
+    private static void restore(Properties properties, String key, @Nullable Object value) {
         if (value == null) {
             properties.remove(key);
         } else {
@@ -151,15 +154,17 @@ final class MixinSession {
      *
      * @param isRelaxed whether an injector of the config may find no target, see {@link #leftOut}
      */
-    void add(String mod, String config, boolean isRelaxed, int compatibility) {
+    void add(@Nullable String mod, String config, boolean isRelaxed, int compatibility) {
         String id = mod == null ? config : mod;
         if (transformed) {
-            throw new IllegalStateException("Mixin config " + config + " of " + id + " comes after Mixin changed a class");
+            throw new IllegalStateException(
+                    "Mixin config " + config + " of " + id + " comes after Mixin changed a class");
         }
         selected = false;
         String owner = mods.putIfAbsent(config, id);
         if (owner != null) {
-            throw new IllegalArgumentException("Mixin config " + config + " is used by the mods " + owner + " and " + id);
+            throw new IllegalArgumentException(
+                    "Mixin config " + config + " is used by the mods " + owner + " and " + id);
         }
         run(() -> {
             Mixins.addConfiguration(config);
@@ -269,7 +274,7 @@ final class MixinSession {
      * A class Mixin generates itself (the Args subclasses of @ModifyArgs, copies of a mixin's inner classes,
      * MixinExtras' generated classes), null when it has none by that name.
      */
-    byte[] generate(String name) {
+    byte @Nullable [] generate(String name) {
         select();
         transformed = true;
         byte[] bytes = run(() -> transformer.generateClass(environment, name));
@@ -284,11 +289,15 @@ final class MixinSession {
         // Mixin selects and prepares the configs added since, when it is asked about a class.
         run(() -> transformer.couldTransformClass(environment, "java.lang.Object"));
         if (!Mixins.getConfigs().isEmpty()) {
-            throw new IllegalStateException("Mixin configs that are not for the default phase or failed to load: " + Mixins.getConfigs());
+            throw new IllegalStateException(
+                    "Mixin configs that are not for the default phase or failed to load: " + Mixins.getConfigs());
         }
     }
 
-    /** Mixin logs many of its failures and carries on, and throws the others as Errors; both leave here as exceptions. */
+    /**
+     * Mixin logs many of its failures and carries on, and throws the others as Errors; both leave here as
+     * exceptions.
+     */
     private static <T> T run(Supplier<T> mixin) {
         T result;
         try {
@@ -299,7 +308,8 @@ final class MixinSession {
                 cause = cause.getCause();
             }
             // The line Mixin logs before it throws names the mixin and the mod; the innermost cause does not.
-            String message = StderrLogger.failure != null ? StderrLogger.failure.getMessage() : cause.getMessage();
+            RuntimeException logged = StderrLogger.failure;
+            String message = logged != null ? logged.getMessage() : cause.getMessage();
             StderrLogger.failure = null;
             throw new IllegalStateException(message, e);
         } catch (Throwable t) {

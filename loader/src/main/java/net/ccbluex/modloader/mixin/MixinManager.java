@@ -32,6 +32,7 @@ import java.util.function.Function;
 import java.util.stream.Stream;
 import net.ccbluex.modloader.Framework;
 import net.ccbluex.modloader.bridge.Bridge;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Keeps the game's classes in line with the mixins of the loaded mods. Every change of the loaded mods
@@ -46,26 +47,26 @@ public final class MixinManager {
     private final Instrumentation instrumentation;
     private final ClassLoader game = MixinManager.class.getClassLoader().getParent();
     private final URL[] libraries;
-    private final Function<String, Class<?>> modClasses;
-    private final Function<String, byte[]> preMixinClasses;
+    private final Function<String, @Nullable Class<?>> modClasses;
+    private final Function<String, byte @Nullable []> preMixinClasses;
     private final Linker linker;
     private final ClassLoader support;
 
     private final Map<Class<?>, byte[]> baselines = new ConcurrentHashMap<>();
     private final Map<Class<?>, String> initialized = new HashMap<>();
-    private Map<String, List<MixinCompiler.GameConfig>> gameConfigs;
+    private @Nullable Map<String, List<MixinCompiler.GameConfig>> gameConfigs;
     private List<URL> modJars = List.of();
     private Set<String> skipped = Set.of();
     private Set<Class<?>> redefined = Set.of();
-    private volatile MixinCompiler compiler;
+    private volatile @Nullable MixinCompiler compiler;
 
     /**
      * @param lib the directory of the compiler's jars
      * @param modClasses a class of a loaded mod by name, null when no mod has it
      * @param preMixinClasses a class as the game's framework hands it to the game's Mixin, null when it has none
      */
-    public MixinManager(Instrumentation instrumentation, Path lib, Function<String, Class<?>> modClasses,
-            Function<String, byte[]> preMixinClasses) throws IOException, ReflectiveOperationException {
+    public MixinManager(Instrumentation instrumentation, Path lib, Function<String, @Nullable Class<?>> modClasses,
+            Function<String, byte @Nullable []> preMixinClasses) throws IOException, ReflectiveOperationException {
         this.instrumentation = instrumentation;
         this.modClasses = modClasses;
         this.preMixinClasses = preMixinClasses;
@@ -78,11 +79,14 @@ public final class MixinManager {
         }
         this.support = new URLClassLoader("modloader-mixin-support", libraries, game);
         this.linker = new Linker(instrumentation);
-        Bridge.linker = MethodHandles.lookup().bind(linker, "link",
-                MethodType.methodType(CallSite.class, MethodHandles.Lookup.class, String.class, MethodType.class, Object[].class));
+        Bridge.linker = MethodHandles.lookup().bind(linker, "link", MethodType.methodType(CallSite.class,
+                MethodHandles.Lookup.class, String.class, MethodType.class, Object[].class));
     }
 
-    /** What Mixin makes of the game's classes for a set of configs, not yet in the game: see {@link #apply(Compilation)}. */
+    /**
+     * What Mixin makes of the game's classes for a set of configs, not yet in the game: see
+     * {@link #apply(Compilation)}.
+     */
     public record Compilation(MixinCompiler compiler, Map<String, Redefinition> redefinitions) {
     }
 
@@ -106,8 +110,8 @@ public final class MixinManager {
         // A mixin plugin may look services of its mod up through the thread's class loader.
         thread.setContextClassLoader(next.getClass().getClassLoader());
         try {
-            return new Compilation(next, next.compile(configs, relaxed, replacements, this::gameConfigs, preMixinClasses, this::baseline,
-                    this::isInitialized));
+            return new Compilation(next, next.compile(configs, relaxed, replacements, this::gameConfigs,
+                    preMixinClasses, this::baseline, this::isInitialized));
         } finally {
             thread.setContextClassLoader(context);
         }
@@ -119,7 +123,8 @@ public final class MixinManager {
      *
      * @return what the mixins ask for that had to be left out and was not left out before
      */
-    public synchronized List<String> apply(Compilation compilation) throws ReflectiveOperationException, UnmodifiableClassException {
+    public synchronized List<String> apply(Compilation compilation)
+            throws ReflectiveOperationException, UnmodifiableClassException {
         if (compilation.redefinitions().isEmpty() && redefined.isEmpty()) {
             // The compiler tells the classes of the mods from the game's by their jars.
             compiler = compilation.compiler();
@@ -188,33 +193,17 @@ public final class MixinManager {
 
         companions.putAll(added);
         linker.generation = new Linker.Generation(companions, methods, interfaces, fields);
-        List<String> failed = new ArrayList<>();
+        List<String> failed;
         try {
-            for (Map.Entry<Class<?>, Method> initializer : initializers.entrySet()) {
-                // The name carries a hash of the code: static state set up before survives other mods coming and going.
-                if (!initializer.getValue().getName().equals(initialized.put(initializer.getKey(), initializer.getValue().getName()))) {
-                    try {
-                        initializer.getValue().invoke(null);
-                    } catch (InvocationTargetException e) {
-                        if (!relaxed.contains(initializer.getKey())) {
-                            throw e;
-                        }
-                        Throwable cause = e;
-                        while (cause.getCause() != null) {
-                            cause = cause.getCause();
-                        }
-                        failed.add("what the mixins append to the static initializer of " + initializer.getKey().getName()
-                                + ", which fails: " + cause);
-                    }
-                }
-            }
+            failed = initialize(initializers, relaxed);
             instrumentation.redefineClasses(definitions.toArray(ClassDefinition[]::new));
         } catch (ReflectiveOperationException | UnmodifiableClassException | RuntimeException | LinkageError e) {
             linker.generation = previous;
             throw e;
         }
         linker.generation = new Linker.Generation(added, methods, interfaces, fields);
-        // shortcut: fields a mod added stay when another mod still mixes into the class; attribute fields to mods if a reload ever reads stale ones
+        // shortcut: fields a mod added stay when another mod still mixes into the class; attribute fields to mods
+        // if a reload ever reads stale ones
         initialized.keySet().retainAll(methods.keySet());
         linker.forget(methods.keySet());
         redefined = Set.copyOf(methods.keySet());
@@ -226,15 +215,48 @@ public final class MixinManager {
         return skipped.stream().filter(note -> !before.contains(note)).toList();
     }
 
+    /**
+     * Runs what the mixins append to static initializers, each code once.
+     *
+     * @return a note for every one that fails in a relaxed class
+     */
+    private List<String> initialize(Map<Class<?>, Method> initializers, Set<Class<?>> relaxed)
+            throws ReflectiveOperationException {
+        List<String> failed = new ArrayList<>();
+        for (Map.Entry<Class<?>, Method> entry : initializers.entrySet()) {
+            Class<?> target = entry.getKey();
+            Method initializer = entry.getValue();
+            // The name carries a hash of the code: static state set up before survives other mods coming and going.
+            if (initializer.getName().equals(initialized.put(target, initializer.getName()))) {
+                continue;
+            }
+            try {
+                initializer.invoke(null);
+            } catch (InvocationTargetException e) {
+                if (!relaxed.contains(target)) {
+                    throw e;
+                }
+                Throwable cause = e;
+                while (cause.getCause() != null) {
+                    cause = cause.getCause();
+                }
+                failed.add("what the mixins append to the static initializer of " + target.getName()
+                        + ", which fails: " + cause);
+            }
+        }
+        return failed;
+    }
+
     /** A class of a mod as it has to be defined: see {@link MixinCompiler#rewrite}. */
     public byte[] rewrite(ClassLoader loader, byte[] modClass) {
         MixinCompiler current = compiler;
         if (current == null) {
             synchronized (this) {
-                if (compiler == null) {
-                    compiler = compiler(List.of());
-                }
                 current = compiler;
+                if (current == null) {
+                    current = compiler(List.of());
+                    compiler = current;
+                }
             }
         }
         return current.rewrite(loader, modClass);
@@ -243,7 +265,8 @@ public final class MixinManager {
     private MixinCompiler compiler(List<URL> modJars) {
         List<URL> urls = new ArrayList<>(List.of(libraries));
         urls.addAll(modJars);
-        return ServiceLoader.load(MixinCompiler.class, new CompilerClassLoader(urls.toArray(URL[]::new))).findFirst().orElseThrow();
+        return ServiceLoader.load(MixinCompiler.class, new CompilerClassLoader(urls.toArray(URL[]::new)))
+                .findFirst().orElseThrow();
     }
 
     /** An interface a mixin adds brings the interfaces it extends. */
@@ -263,7 +286,7 @@ public final class MixinManager {
     }
 
     /** The class as the game defined it, before any mixin of ours; null when the game has no such class. */
-    private byte[] baseline(String name) {
+    private byte @Nullable [] baseline(String name) {
         String file = name.replace('.', '/') + ".class";
         URL url = game.getResource(file);
         // The game's class loader also reaches the classes of the mods, which load with the mixins applied.
@@ -273,7 +296,7 @@ public final class MixinManager {
         Class<?> type;
         try {
             type = Class.forName(name, false, game);
-        } catch (ClassNotFoundException | LinkageError | RuntimeException e) {
+        } catch (ClassNotFoundException | LinkageError | RuntimeException _) {
             return null;
         }
         return baselines.computeIfAbsent(type, this::capture);
@@ -287,10 +310,12 @@ public final class MixinManager {
         if (preMixinClasses.apply(target) == null) {
             return List.of();
         }
-        if (gameConfigs == null) {
-            gameConfigs = readGameConfigs();
+        Map<String, List<MixinCompiler.GameConfig>> configs = gameConfigs;
+        if (configs == null) {
+            configs = readGameConfigs();
+            gameConfigs = configs;
         }
-        return gameConfigs.getOrDefault(target, List.of());
+        return configs.getOrDefault(target, List.of());
     }
 
     /** The game's Mixin keeps its configs in its transformer, which has no public way to them. */
@@ -298,7 +323,8 @@ public final class MixinManager {
         Map<String, List<MixinCompiler.GameConfig>> configs = new HashMap<>();
         try {
             Class<?> environment = Class.forName("org.spongepowered.asm.mixin.MixinEnvironment", false, game);
-            Object transformer = environment.getMethod("getActiveTransformer").invoke(environment.getMethod("getCurrentEnvironment").invoke(null));
+            Object transformer = environment.getMethod("getActiveTransformer")
+                    .invoke(environment.getMethod("getCurrentEnvironment").invoke(null));
             if (transformer == null) {
                 return configs;
             }
@@ -327,7 +353,7 @@ public final class MixinManager {
                     configs.computeIfAbsent((String) target, _ -> new ArrayList<>()).add(applied);
                 }
             }
-        } catch (ClassNotFoundException e) {
+        } catch (ClassNotFoundException _) {
             // A game without Mixin.
         } catch (ReflectiveOperationException | RuntimeException e) {
             throw new IllegalStateException("cannot read the mixin configs of the game's Mixin", e);
@@ -348,12 +374,12 @@ public final class MixinManager {
         throw new NoSuchFieldException("the transformer " + transformer.getClass().getName() + " wraps");
     }
 
-    private byte[] capture(Class<?> type) {
+    private byte @Nullable [] capture(Class<?> type) {
         // A class of the JDK is what its class file says; retransforming those costs a safepoint each.
         if (type.getClassLoader() == null || !instrumentation.isModifiableClass(type)) {
             try (InputStream in = ClassLoader.getSystemResourceAsStream(type.getName().replace('.', '/') + ".class")) {
                 return in == null ? null : in.readAllBytes();
-            } catch (IOException e) {
+            } catch (IOException _) {
                 return null;
             }
         }
@@ -361,7 +387,8 @@ public final class MixinManager {
         byte[][] captured = new byte[1][];
         ClassFileTransformer capture = new ClassFileTransformer() {
             @Override
-            public byte[] transform(ClassLoader loader, String name, Class<?> retransformed, ProtectionDomain domain, byte[] bytes) {
+            public byte @Nullable [] transform(@Nullable ClassLoader loader, String name,
+                    @Nullable Class<?> retransformed, @Nullable ProtectionDomain domain, byte[] bytes) {
                 if (retransformed == type) {
                     captured[0] = bytes;
                 }
@@ -371,7 +398,7 @@ public final class MixinManager {
         instrumentation.addTransformer(capture, true);
         try {
             instrumentation.retransformClasses(type);
-        } catch (UnmodifiableClassException e) {
+        } catch (UnmodifiableClassException _) {
             return null;
         } finally {
             instrumentation.removeTransformer(capture);

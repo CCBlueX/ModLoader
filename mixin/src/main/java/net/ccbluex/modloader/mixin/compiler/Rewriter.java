@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Stream;
+import org.jspecify.annotations.Nullable;
 import org.objectweb.asm.Handle;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
@@ -52,8 +53,8 @@ final class Rewriter {
     }
 
     static final Handle LINK = new Handle(Opcodes.H_INVOKESTATIC, "net/ccbluex/modloader/bridge/Bridge", "link",
-            "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;[Ljava/lang/Object;)"
-                    + "Ljava/lang/invoke/CallSite;",
+            "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;"
+                    + "[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;",
             false);
 
     private final ClassFiles game;
@@ -73,7 +74,7 @@ final class Rewriter {
      * @param companion what {@code node} is the companion of, null for a class of a mod
      * @return whether anything changed
      */
-    boolean rewrite(ClassNode node, ClassFiles hierarchy, Companion companion) {
+    boolean rewrite(ClassNode node, ClassFiles hierarchy, @Nullable Companion companion) {
         // A companion sits in a package of its own; a mod's class reaches its own package but no hidden game class.
         ClassFiles hidden = companion != null ? hierarchy : game;
         boolean changed = false;
@@ -122,7 +123,9 @@ final class Rewriter {
             }
             // Frames name the uninitialized value by the label of its new instruction.
             Set<LabelNode> labels = new HashSet<>();
-            for (AbstractInsnNode before = creation.getPrevious(); before != null && before.getOpcode() < 0; before = before.getPrevious()) {
+            for (AbstractInsnNode before = creation.getPrevious();
+                    before != null && before.getOpcode() < 0;
+                    before = before.getPrevious()) {
                 if (before instanceof LabelNode label) {
                     labels.add(label);
                 }
@@ -134,8 +137,9 @@ final class Rewriter {
             }
             method.instructions.remove(creation.getNext());
             method.instructions.remove(creation);
-            method.instructions.set(call, link("new", Type.getMethodDescriptor(Type.getObjectType(call.owner), Type.getArgumentTypes(call.desc)),
-                    "new", call.owner.replace('/', '.'), call.desc));
+            String descriptor =
+                    Type.getMethodDescriptor(Type.getObjectType(call.owner), Type.getArgumentTypes(call.desc));
+            method.instructions.set(call, link("new", descriptor, "new", call.owner.replace('/', '.'), call.desc));
             changed = true;
         }
         return changed;
@@ -157,7 +161,8 @@ final class Rewriter {
         return true;
     }
 
-    private AbstractInsnNode field(ClassNode from, ClassFiles hierarchy, ClassFiles hidden, Companion companion, FieldInsnNode field) {
+    private @Nullable AbstractInsnNode field(ClassNode from, ClassFiles hierarchy, ClassFiles hidden,
+            @Nullable Companion companion, FieldInsnNode field) {
         // A field of a mod is erased where it is declared too.
         if (!(isHidden(field.desc, hidden) && (companion != null || isGame(field.owner)))) {
             if (!isGame(field.owner)) {
@@ -166,7 +171,8 @@ final class Rewriter {
             boolean isWrite = field.getOpcode() == Opcodes.PUTFIELD || field.getOpcode() == Opcodes.PUTSTATIC;
             ClassFiles.Member member = game.field(field.owner, field.name, field.desc);
             // Only the class itself may write its final fields, and only while it initializes.
-            if (member != null && isAccessible(field.owner, member, from, hierarchy) && !(isWrite && (member.access() & Opcodes.ACC_FINAL) != 0)) {
+            if (member != null && isAccessible(field.owner, member, from, hierarchy)
+                    && !(isWrite && (member.access() & Opcodes.ACC_FINAL) != 0)) {
                 return null;
             }
         }
@@ -179,9 +185,11 @@ final class Rewriter {
         };
     }
 
-    private AbstractInsnNode call(ClassNode from, ClassFiles hierarchy, ClassFiles hidden, Companion companion, MethodInsnNode call) {
+    private @Nullable AbstractInsnNode call(ClassNode from, ClassFiles hierarchy, ClassFiles hidden,
+            @Nullable Companion companion, MethodInsnNode call) {
         if (call.name.equals("<init>") || call.owner.startsWith("[")) {
-            // shortcut: a constructor the mod may not call fails as it would without us; construct through Linker once a mod needs it
+            // shortcut: a constructor the mod may not call fails as it would without us; construct through Linker
+            // once a mod needs it
             return null;
         }
         String owner = call.owner.replace('/', '.');
@@ -205,8 +213,8 @@ final class Rewriter {
         }
         if (call.getOpcode() == Opcodes.INVOKESPECIAL) {
             // In a companion this is a super call or a private call the target's code made; a mod's own stay.
-            return companion == null ? null
-                    : link(call.name, withReceiver(call.desc), "invokespecial", owner, companion.target().replace('/', '.'), declared);
+            return companion == null ? null : link(call.name, withReceiver(call.desc), "invokespecial", owner,
+                    companion.target().replace('/', '.'), declared);
         }
         if (declared == null) {
             if (call.getOpcode() == Opcodes.INVOKEINTERFACE && interfaces.contains(call.owner)) {
@@ -222,12 +230,13 @@ final class Rewriter {
         }
         return switch (call.getOpcode()) {
             case Opcodes.INVOKESTATIC -> link(call.name, call.desc, "invokestatic", owner, declared);
-            case Opcodes.INVOKEINTERFACE -> link(call.name, withReceiver(call.desc), "invokeinterface", owner, declared);
+            case Opcodes.INVOKEINTERFACE ->
+                    link(call.name, withReceiver(call.desc), "invokeinterface", owner, declared);
             default -> link(call.name, withReceiver(call.desc), "invokevirtual", owner, declared);
         };
     }
 
-    private AbstractInsnNode type(ClassFiles hidden, TypeInsnNode type) {
+    private @Nullable AbstractInsnNode type(ClassFiles hidden, TypeInsnNode type) {
         String descriptor = Type.getObjectType(type.desc).getDescriptor();
         boolean isHidden = isHidden(descriptor, hidden);
         if (!interfaces.contains(type.desc) && !isHidden) {
@@ -236,14 +245,16 @@ final class Rewriter {
         String name = type.desc.replace('/', '.');
         return switch (type.getOpcode()) {
             // A hidden class is in the frames as its public superclass, which the erased result type then is.
-            case Opcodes.CHECKCAST -> link("cast", "(Ljava/lang/Object;)" + (isHidden ? descriptor : "Ljava/lang/Object;"), "checkcast", name);
+            case Opcodes.CHECKCAST -> link("cast",
+                    "(Ljava/lang/Object;)" + (isHidden ? descriptor : "Ljava/lang/Object;"), "checkcast", name);
             case Opcodes.INSTANCEOF -> link("is", "(Ljava/lang/Object;)Z", "instanceof", name);
             default -> null;
         };
     }
 
     /** A lambda or method reference names its method by handle; one the game refuses gets a method to go through. */
-    private boolean handles(ClassNode node, ClassFiles hierarchy, ClassFiles hidden, Companion companion, InvokeDynamicInsnNode dynamic) {
+    private boolean handles(ClassNode node, ClassFiles hierarchy, ClassFiles hidden, @Nullable Companion companion,
+            InvokeDynamicInsnNode dynamic) {
         boolean changed = false;
         for (int i = 0; i < dynamic.bsmArgs.length; i++) {
             if (!(dynamic.bsmArgs[i] instanceof Handle handle)) {
@@ -259,8 +270,8 @@ final class Rewriter {
             if (opcode < 0) {
                 continue;
             }
-            AbstractInsnNode replacement = call(node, hierarchy, hidden, companion,
-                    new MethodInsnNode(opcode, handle.getOwner(), handle.getName(), handle.getDesc(), handle.isInterface()));
+            AbstractInsnNode replacement = call(node, hierarchy, hidden, companion, new MethodInsnNode(
+                    opcode, handle.getOwner(), handle.getName(), handle.getDesc(), handle.isInterface()));
             if (replacement instanceof MethodInsnNode moved) {
                 dynamic.bsmArgs[i] = new Handle(Opcodes.H_INVOKESTATIC, moved.owner, moved.name, moved.desc, false);
                 changed = true;
@@ -334,12 +345,16 @@ final class Rewriter {
                             dynamic.bsm = LINK;
                         }
                         dynamic.desc = erase(dynamic.desc, hierarchy);
-                        dynamic.bsmArgs = Arrays.stream(dynamic.bsmArgs).map(argument -> erase(argument, hierarchy)).toArray();
+                        dynamic.bsmArgs = Arrays.stream(dynamic.bsmArgs)
+                                .map(argument -> erase(argument, hierarchy))
+                                .toArray();
                     }
                     case LdcInsnNode constant -> constant.cst = erase(constant.cst, hierarchy);
                     case FrameNode frame -> {
-                        frame.local = frame.local == null ? null : frame.local.stream().map(type -> eraseFrame(type, hierarchy)).toList();
-                        frame.stack = frame.stack == null ? null : frame.stack.stream().map(type -> eraseFrame(type, hierarchy)).toList();
+                        frame.local = frame.local == null ? null
+                                : frame.local.stream().map(type -> eraseFrame(type, hierarchy)).toList();
+                        frame.stack = frame.stack == null ? null
+                                : frame.stack.stream().map(type -> eraseFrame(type, hierarchy)).toList();
                     }
                     default -> {
                     }
@@ -356,7 +371,8 @@ final class Rewriter {
                 case MethodInsnNode call -> isHidden(call.desc, hierarchy);
                 case FieldInsnNode field -> isHidden(field.desc, hierarchy);
                 case InvokeDynamicInsnNode dynamic -> isHidden(dynamic.desc, hierarchy)
-                        || Arrays.stream(dynamic.bsmArgs).anyMatch(argument -> !erase(argument, hierarchy).equals(argument));
+                        || Arrays.stream(dynamic.bsmArgs)
+                                .anyMatch(argument -> !erase(argument, hierarchy).equals(argument));
                 case LdcInsnNode constant -> !erase(constant.cst, hierarchy).equals(constant.cst);
                 case FrameNode frame -> Stream.concat(frame.local == null ? Stream.empty() : frame.local.stream(),
                         frame.stack == null ? Stream.empty() : frame.stack.stream())
@@ -372,7 +388,8 @@ final class Rewriter {
 
     private static Object erase(Object constant, ClassFiles hierarchy) {
         return switch (constant) {
-            case Type type when type.getSort() == Type.METHOD -> Type.getMethodType(erase(type.getDescriptor(), hierarchy));
+            case Type type when type.getSort() == Type.METHOD ->
+                    Type.getMethodType(erase(type.getDescriptor(), hierarchy));
             case Handle handle -> new Handle(handle.getTag(), handle.getOwner(), handle.getName(),
                     erase(handle.getDesc(), hierarchy), handle.isInterface());
             default -> constant;
@@ -384,7 +401,8 @@ final class Rewriter {
         if (!(type instanceof String name)) {
             return type;
         }
-        return name.startsWith("[") ? erase(name, hierarchy) : Type.getType(erase("L" + name + ";", hierarchy)).getInternalName();
+        return name.startsWith("[") ? erase(name, hierarchy)
+                : Type.getType(erase("L" + name + ";", hierarchy)).getInternalName();
     }
 
     /** A field or method descriptor with every hidden class replaced. */
@@ -395,7 +413,8 @@ final class Rewriter {
             for (int i = 0; i < arguments.length; i++) {
                 arguments[i] = Type.getType(erase(arguments[i].getDescriptor(), hierarchy));
             }
-            return Type.getMethodDescriptor(Type.getType(erase(Type.getReturnType(descriptor).getDescriptor(), hierarchy)), arguments);
+            return Type.getMethodDescriptor(
+                    Type.getType(erase(Type.getReturnType(descriptor).getDescriptor(), hierarchy)), arguments);
         }
         if (type.getSort() == Type.ARRAY) {
             return "[".repeat(type.getDimensions()) + erase(type.getElementType().getDescriptor(), hierarchy);
@@ -404,7 +423,9 @@ final class Rewriter {
             return descriptor;
         }
         String name = type.getInternalName();
-        for (var node = hierarchy.get(name); node != null && (node.access & Opcodes.ACC_PUBLIC) == 0; node = hierarchy.get(name)) {
+        for (ClassNode node = hierarchy.get(name);
+                node != null && (node.access & Opcodes.ACC_PUBLIC) == 0;
+                node = hierarchy.get(name)) {
             name = node.superName == null ? "java/lang/Object" : node.superName;
         }
         return "L" + name + ";";
@@ -415,16 +436,23 @@ final class Rewriter {
         return !erase(descriptor, hierarchy).equals(descriptor);
     }
 
-    /** A class of the game: not of the JDK, which nothing here changes, and not of a mod, whose code links as compiled. */
+    /**
+     * A class of the game: not of the JDK, which nothing here changes, and not of a mod, whose code links as
+     * compiled.
+     */
     private boolean isGame(String owner) {
         return !owner.startsWith("[") && !owner.startsWith("java/") && !owner.startsWith("javax/")
                 && !owner.startsWith("jdk/") && !owner.startsWith("sun/")
                 && !owner.startsWith("org/spongepowered/asm/synthetic/") && game.get(owner) != null;
     }
 
-    /** A mod never shares a package with a game class at runtime, so only public and inherited protected members link. */
+    /**
+     * A mod never shares a package with a game class at runtime, so only public and inherited protected members
+     * link.
+     */
     private boolean isAccessible(String owner, ClassFiles.Member member, ClassNode from, ClassFiles hierarchy) {
-        if ((game.get(owner).access & Opcodes.ACC_PUBLIC) == 0) {
+        ClassNode node = game.get(owner);
+        if (node == null || (node.access & Opcodes.ACC_PUBLIC) == 0) {
             return false;
         }
         if ((member.access() & Opcodes.ACC_PUBLIC) != 0) {
@@ -439,7 +467,8 @@ final class Rewriter {
     }
 
     /** Arguments after the kind and the owner that are null are left out. */
-    private static InvokeDynamicInsnNode link(String name, String descriptor, String kind, String owner, String... more) {
+    private static InvokeDynamicInsnNode link(
+            String name, String descriptor, String kind, String owner, @Nullable String... more) {
         Object[] arguments = Stream.concat(Stream.of(kind, owner), Stream.of(more).filter(Objects::nonNull)).toArray();
         return new InvokeDynamicInsnNode(name, descriptor, LINK, arguments);
     }

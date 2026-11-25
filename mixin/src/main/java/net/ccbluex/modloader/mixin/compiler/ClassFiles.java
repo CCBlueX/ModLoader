@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import net.ccbluex.modloader.ModClassLoader;
+import org.jspecify.annotations.Nullable;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.FieldNode;
@@ -27,7 +28,7 @@ final class ClassFiles {
     }
 
     private final ClassLoader loader;
-    private final URLClassLoader excluded;
+    private final @Nullable URLClassLoader excluded;
     private final Map<String, Optional<ClassNode>> classes = new ConcurrentHashMap<>();
 
     ClassFiles(ClassLoader loader) {
@@ -35,17 +36,18 @@ final class ClassFiles {
     }
 
     /** @param excluded a class loader whose own jars do not count, though {@code loader} reaches them */
-    ClassFiles(ClassLoader loader, URLClassLoader excluded) {
+    ClassFiles(ClassLoader loader, @Nullable URLClassLoader excluded) {
         this.loader = loader;
         this.excluded = excluded;
     }
 
     /** Null when the loader has no class file by that internal name. */
-    ClassNode get(String name) {
+    @Nullable ClassNode get(String name) {
         return classes.computeIfAbsent(name, _ -> {
             URL url = loader.getResource(name + ".class");
             URL own = excluded == null ? null : excluded.findResource(name + ".class");
-            if (url == null || own != null && (url.toString().equals(own.toString()) || ModClassLoader.isModFirst(name))) {
+            if (url == null
+                    || own != null && (url.toString().equals(own.toString()) || ModClassLoader.isModFirst(name))) {
                 return Optional.empty();
             }
             // The class loader reads from the jar it keeps open; opening the URL would open the jar for every class.
@@ -54,16 +56,17 @@ final class ClassFiles {
                     return Optional.empty();
                 }
                 ClassNode node = new ClassNode();
-                new ClassReader(in).accept(node, ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+                new ClassReader(in).accept(node,
+                        ClassReader.SKIP_CODE | ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
                 return Optional.of(node);
-            } catch (IOException e) {
+            } catch (IOException _) {
                 return Optional.empty();
             }
         }).orElse(null);
     }
 
     /** As the JVM looks a field up: the class, its interfaces, its superclass. */
-    Member field(String owner, String name, String descriptor) {
+    @Nullable Member field(@Nullable String owner, String name, String descriptor) {
         ClassNode node = owner == null ? null : get(owner);
         if (node == null) {
             return null;
@@ -82,7 +85,7 @@ final class ClassFiles {
         return field(node.superName, name, descriptor);
     }
 
-    Member method(String owner, String name, String descriptor) {
+    @Nullable Member method(@Nullable String owner, String name, String descriptor) {
         ClassNode node = owner == null ? null : get(owner);
         if (node == null) {
             return null;

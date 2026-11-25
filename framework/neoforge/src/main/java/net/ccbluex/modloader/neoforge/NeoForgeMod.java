@@ -23,7 +23,9 @@ final class NeoForgeMod extends TomlModFile {
 
     @Override
     public List<String> mixinConfigs() {
-        return toml.<List<Config>>getOrElse("mixins", List.of()).stream().map(mixin -> mixin.<String>get("config")).toList();
+        return toml.<List<Config>>getOrElse("mixins", List.of()).stream()
+                .map(mixin -> mixin.<String>get("config"))
+                .toList();
     }
 
     @Override

@@ -1,5 +1,6 @@
 package net.ccbluex.modloader.mixin.compiler;
 
+import org.jspecify.annotations.Nullable;
 import org.spongepowered.asm.service.IGlobalPropertyService;
 import org.spongepowered.asm.service.IPropertyKey;
 
@@ -21,7 +22,7 @@ public final class MixinProperties implements IGlobalPropertyService {
 
     @Override
     @SuppressWarnings("unchecked")
-    public <T> T getProperty(IPropertyKey key) {
+    public <T> @Nullable T getProperty(IPropertyKey key) {
         return (T) properties.get(key);
     }
 
@@ -32,12 +33,12 @@ public final class MixinProperties implements IGlobalPropertyService {
 
     @Override
     @SuppressWarnings("unchecked")
-    public <T> T getProperty(IPropertyKey key, T defaultValue) {
+    public <T> @Nullable T getProperty(IPropertyKey key, @Nullable T defaultValue) {
         return (T) properties.getOrDefault(key, defaultValue);
     }
 
     @Override
-    public String getPropertyString(IPropertyKey key, String defaultValue) {
+    public @Nullable String getPropertyString(IPropertyKey key, @Nullable String defaultValue) {
         Object value = properties.get(key);
         return value != null ? value.toString() : defaultValue;
     }

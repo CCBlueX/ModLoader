@@ -19,6 +19,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Links the calls the compiler writes into classes in place of what a loaded game class refuses: a method a
@@ -40,12 +41,17 @@ public final class Linker {
 
     static {
         try {
-            IS_INSTANCE = LOOKUP.findVirtual(Linker.class, "isInstance", MethodType.methodType(boolean.class, Class.class, Object.class));
-            CAST = LOOKUP.findVirtual(Linker.class, "cast", MethodType.methodType(Object.class, Class.class, Object.class));
+            IS_INSTANCE = LOOKUP.findVirtual(Linker.class, "isInstance",
+                    MethodType.methodType(boolean.class, Class.class, Object.class));
+            CAST = LOOKUP.findVirtual(Linker.class, "cast",
+                    MethodType.methodType(Object.class, Class.class, Object.class));
             FIND = LOOKUP.findVirtual(Dispatch.class, "find", MethodType.methodType(MethodHandle.class, Object.class));
-            FIND_STATIC = LOOKUP.findVirtual(Dispatch.class, "find", MethodType.methodType(MethodHandle.class, Class.class));
-            CLASS_IS_INSTANCE = LOOKUP.findVirtual(Class.class, "isInstance", MethodType.methodType(boolean.class, Object.class));
-            LAMBDA = LOOKUP.findStatic(Linker.class, "lambda", MethodType.methodType(Object.class, Class.class, String.class, MethodHandle.class, Object[].class));
+            FIND_STATIC = LOOKUP.findVirtual(Dispatch.class, "find",
+                    MethodType.methodType(MethodHandle.class, Class.class));
+            CLASS_IS_INSTANCE = LOOKUP.findVirtual(Class.class, "isInstance",
+                    MethodType.methodType(boolean.class, Object.class));
+            LAMBDA = LOOKUP.findStatic(Linker.class, "lambda",
+                    MethodType.methodType(Object.class, Class.class, String.class, MethodHandle.class, Object[].class));
         } catch (ReflectiveOperationException e) {
             throw new ExceptionInInitializerError(e);
         }
@@ -113,15 +119,15 @@ public final class Linker {
             Class<?> owner = Class.forName(subject, false, loader);
             handle = switch (kind) {
                 case "getfield", "getstatic", "putfield", "putstatic" -> field(kind, owner, name, type);
-                case "invokevirtual", "invokeinterface", "invokestatic" -> method(kind, owner, name, type, null,
-                        declared(arguments, 2, loader));
+                case "invokevirtual", "invokeinterface", "invokestatic" ->
+                        method(kind, owner, name, type, null, declared(arguments, 2, loader));
                 // A super call a mixin wrote, made from outside the class it was written for: the third argument.
-                case "invokespecial" -> method(kind, owner, name, type, Class.forName((String) arguments[2], false, loader),
-                        declared(arguments, 3, loader));
+                case "invokespecial" -> method(kind, owner, name, type,
+                        Class.forName((String) arguments[2], false, loader), declared(arguments, 3, loader));
                 case "instanceof" -> MethodHandles.insertArguments(IS_INSTANCE, 0, this, owner);
                 case "checkcast" -> MethodHandles.insertArguments(CAST, 0, this, owner);
                 // The constructor's descriptor is the third argument.
-                case "new" -> constructor(owner, declared(arguments, 2, loader));
+                case "new" -> constructor(owner, MethodType.fromMethodDescriptorString((String) arguments[2], loader));
                 default -> throw new IllegalArgumentException(kind);
             };
         }
@@ -130,24 +136,27 @@ public final class Linker {
 
     private static Object lambda(Class<?> functional, String name, MethodHandle implementation, Object[] captured) {
         MethodHandle bound = MethodHandles.insertArguments(implementation, 0, captured);
-        return Proxy.newProxyInstance(functional.getClassLoader(), new Class<?>[] {functional}, (proxy, method, arguments) -> {
-            Object[] given = arguments == null ? new Object[0] : arguments;
-            if (method.getName().equals(name) && Modifier.isAbstract(method.getModifiers())) {
-                return bound.invokeWithArguments(given);
-            }
-            if (method.isDefault()) {
-                return InvocationHandler.invokeDefault(proxy, method, given);
-            }
-            return switch (method.getName()) {
-                case "equals" -> proxy == given[0];
-                case "hashCode" -> System.identityHashCode(proxy);
-                default -> functional.getName() + "@" + Integer.toHexString(System.identityHashCode(proxy));
-            };
-        });
+        return Proxy.newProxyInstance(functional.getClassLoader(), new Class<?>[] {functional},
+                (proxy, method, arguments) -> {
+                    Object[] given = arguments == null ? new Object[0] : arguments;
+                    if (method.getName().equals(name) && Modifier.isAbstract(method.getModifiers())) {
+                        return bound.invokeWithArguments(given);
+                    }
+                    if (method.isDefault()) {
+                        return InvocationHandler.invokeDefault(proxy, method, given);
+                    }
+                    return switch (method.getName()) {
+                        case "equals" -> proxy == given[0];
+                        case "hashCode" -> System.identityHashCode(proxy);
+                        default -> functional.getName() + "@" + Integer.toHexString(System.identityHashCode(proxy));
+                    };
+                });
     }
 
-    private static MethodType declared(Object[] arguments, int index, ClassLoader loader) {
-        return arguments.length > index ? MethodType.fromMethodDescriptorString((String) arguments[index], loader) : null;
+    private static @Nullable MethodType declared(Object[] arguments, int index, ClassLoader loader) {
+        return arguments.length > index
+                ? MethodType.fromMethodDescriptorString((String) arguments[index], loader)
+                : null;
     }
 
     private MethodHandle constructor(Class<?> owner, MethodType declared) throws ReflectiveOperationException {
@@ -157,14 +166,16 @@ public final class Linker {
         return LOOKUP.unreflectConstructor(constructor);
     }
 
-    private MethodHandle field(String kind, Class<?> owner, String name, MethodType type) throws ReflectiveOperationException {
+    private MethodHandle field(String kind, Class<?> owner, String name, MethodType type)
+            throws ReflectiveOperationException {
         boolean isStatic = kind.endsWith("static");
         boolean isRead = kind.startsWith("get");
         Class<?> fieldType = isRead ? type.returnType() : type.lastParameterType();
         Field field = findField(owner, name, fieldType);
         if (field == null) {
             String key = owner.getName() + '.' + name;
-            VirtualField virtual = fields.computeIfAbsent(key, _ -> new VirtualField(fieldType, generation.fields().get(key)));
+            VirtualField virtual = fields.computeIfAbsent(key,
+                    _ -> new VirtualField(fieldType, generation.fields().get(key)));
             return isRead ? virtual.getter(isStatic) : virtual.setter(isStatic);
         }
         Class<?> declaring = field.getDeclaringClass();
@@ -192,49 +203,48 @@ public final class Linker {
         return MethodHandles.insertArguments(setter, 1, unsafe("objectFieldOffset", field));
     }
 
-    /** @param declared the method's descriptor, when the call site's has other types */
-    private MethodHandle method(String kind, Class<?> owner, String name, MethodType type, Class<?> superCaller, MethodType declared)
-            throws IllegalAccessException {
+    /**
+     * @param superCaller the class an invokespecial was written for, else null
+     * @param declared the method's descriptor, when the call site's has other types
+     */
+    private MethodHandle method(String kind, Class<?> owner, String name, MethodType type,
+            @Nullable Class<?> superCaller, @Nullable MethodType declared) throws IllegalAccessException {
         boolean isStatic = kind.equals("invokestatic");
         MethodType signature = declared != null ? declared : isStatic ? type : type.dropParameterTypes(0, 1);
-        Method method = findMethod(owner, name, signature);
-        MethodHandle direct = null;
-        if (method != null) {
-            open(method.getDeclaringClass());
-            method.setAccessible(true);
-            if (superCaller == null) {
-                direct = LOOKUP.unreflect(method);
-            } else {
-                open(superCaller);
-                direct = MethodHandles.privateLookupIn(superCaller, LOOKUP).unreflectSpecial(method, superCaller);
-            }
-        }
         Dispatch dispatch = new Dispatch(name, signature, type);
-        if (isStatic && direct == null) {
-            // A static method a mixin added, such as an accessor; its owner is the class it was called on.
-            return MethodHandles.foldArguments(MethodHandles.exactInvoker(type), MethodHandles.insertArguments(FIND_STATIC, 0, dispatch, owner));
-        }
-        if (isStatic || superCaller != null) {
-            if (direct == null) {
+        Method method = findMethod(owner, name, signature);
+        if (method == null) {
+            if (isStatic) {
+                // A static method a mixin added, such as an accessor; its owner is the class it was called on.
+                return MethodHandles.foldArguments(MethodHandles.exactInvoker(type),
+                        MethodHandles.insertArguments(FIND_STATIC, 0, dispatch, owner));
+            }
+            if (superCaller != null) {
                 return dispatch.find(owner);
             }
-            return direct;
+            return dispatch.invoker();
         }
-        MethodHandle added = MethodHandles.foldArguments(MethodHandles.exactInvoker(type),
-                FIND.bindTo(dispatch).asType(MethodType.methodType(MethodHandle.class, type.parameterType(0))));
-        if (direct == null) {
-            return added;
+        open(method.getDeclaringClass());
+        method.setAccessible(true);
+        if (superCaller != null) {
+            open(superCaller);
+            return MethodHandles.privateLookupIn(superCaller, LOOKUP).unreflectSpecial(method, superCaller);
         }
+        MethodHandle direct = LOOKUP.unreflect(method);
         if (!kind.equals("invokeinterface")) {
             return direct;
         }
         // The receiver either implements the interface or got it from a mixin.
         MethodHandle implementsIt = CLASS_IS_INSTANCE.bindTo(method.getDeclaringClass())
                 .asType(MethodType.methodType(boolean.class, type.parameterType(0)));
-        return MethodHandles.guardWithTest(implementsIt, direct.asType(type), added);
+        return MethodHandles.guardWithTest(implementsIt, direct.asType(type), dispatch.invoker());
     }
 
-    /** Finds the companion method standing for a method a mixin added to the class of the receiver. */
+    /**
+     * Finds the companion method standing for a method a mixin added to the class of the receiver.
+     *
+     * @agent claude-fable-5-2
+     */
     private final class Dispatch {
 
         private record Cache(Generation generation, Map<Class<?>, MethodHandle> handles) {
@@ -244,13 +254,19 @@ public final class Linker {
         private final MethodType signature;
         private final String method;
         private final MethodType type;
-        private volatile Cache cache = new Cache(null, Map.of());
+        private volatile Cache cache = new Cache(generation, new ConcurrentHashMap<>());
 
         Dispatch(String name, MethodType signature, MethodType type) {
             this.name = name;
             this.signature = signature;
             this.method = name + signature.toMethodDescriptorString();
             this.type = type;
+        }
+
+        /** Calls what {@link #find(Object)} gives for the receiver, the first argument. */
+        MethodHandle invoker() {
+            return MethodHandles.foldArguments(MethodHandles.exactInvoker(type),
+                    FIND.bindTo(this).asType(MethodType.methodType(MethodHandle.class, type.parameterType(0))));
         }
 
         @SuppressWarnings("unused")
@@ -278,7 +294,7 @@ public final class Linker {
         }
 
         /** The method as a mixin added it to the class or to what it extends or implements. */
-        private MethodHandle added(Generation from, Class<?> declaring) {
+        private @Nullable MethodHandle added(Generation from, @Nullable Class<?> declaring) {
             if (declaring == null) {
                 return null;
             }
@@ -298,7 +314,7 @@ public final class Linker {
          * The method the class has itself, as the game's framework wrote it, which the mod's call reaches as the
          * JVM's would when the class implemented the interface. A mixin left out its accessor for that method.
          */
-        private MethodHandle own(Class<?> declaring) {
+        private @Nullable MethodHandle own(Class<?> declaring) {
             Method own = findMethod(declaring, name, signature);
             if (own == null || Modifier.isAbstract(own.getModifiers())) {
                 return null;
@@ -314,7 +330,7 @@ public final class Linker {
     }
 
     @SuppressWarnings("unused")
-    private boolean isInstance(Class<?> type, Object object) {
+    private boolean isInstance(Class<?> type, @Nullable Object object) {
         if (object == null) {
             return false;
         }
@@ -330,7 +346,7 @@ public final class Linker {
     }
 
     @SuppressWarnings("unused")
-    private Object cast(Class<?> type, Object object) {
+    private @Nullable Object cast(Class<?> type, @Nullable Object object) {
         if (object != null && !isInstance(type, object)) {
             throw new ClassCastException(object.getClass().getName() + " cannot be cast to " + type.getName());
         }
@@ -342,7 +358,7 @@ public final class Linker {
      * field of a name the class has with another type. The type may be a superclass the compiler put in place of
      * the field's.
      */
-    private static Field findField(Class<?> owner, String name, Class<?> type) {
+    private static @Nullable Field findField(@Nullable Class<?> owner, String name, Class<?> type) {
         if (owner == null) {
             return null;
         }
@@ -360,7 +376,7 @@ public final class Linker {
         return findField(owner.getSuperclass(), name, type);
     }
 
-    private static Method findMethod(Class<?> owner, String name, MethodType signature) {
+    private static @Nullable Method findMethod(@Nullable Class<?> owner, String name, MethodType signature) {
         if (owner == null) {
             return null;
         }
@@ -395,7 +411,8 @@ public final class Linker {
         Module module = type.getModule();
         Module self = Linker.class.getModule();
         if (!module.isOpen(type.getPackageName(), self)) {
-            instrumentation.redefineModule(module, Set.of(), Map.of(), Map.of(type.getPackageName(), Set.of(self)), Set.of(), Map.of());
+            instrumentation.redefineModule(module, Set.of(), Map.of(), Map.of(type.getPackageName(), Set.of(self)),
+                    Set.of(), Map.of());
         }
     }
 }

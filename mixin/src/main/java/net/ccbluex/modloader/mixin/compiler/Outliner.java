@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
+import org.jspecify.annotations.Nullable;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Handle;
@@ -62,7 +63,16 @@ final class Outliner {
      * @param skipped what the mixins ask for that had to be left out, for the person loading the mod
      */
     record Outline(ClassNode target, ClassNode companion, List<String> interfaces, Map<String, MethodNode> methods,
-            String initializer, Map<String, String> fields, List<String> skipped) {
+            @Nullable String initializer, Map<String, String> fields, List<String> skipped) {
+    }
+
+    /**
+     * A field or method as {@link #names} tells them apart.
+     *
+     * @param mixin the mixin that merged a method, empty for a field and for the class's own
+     * @agent claude-fable-5-2
+     */
+    private record Merged(String name, String desc, String mixin) {
     }
 
     private final ClassFiles classes;
@@ -71,7 +81,7 @@ final class Outliner {
     private final Map<String, MethodNode> added = new LinkedHashMap<>();
     private final Map<String, String> fields = new LinkedHashMap<>();
     private final List<String> skipped = new ArrayList<>();
-    private String initializer;
+    private @Nullable String initializer;
 
     private Outliner(ClassFiles classes, ClassNode baseline, String companionName) {
         this.classes = classes;
@@ -91,8 +101,8 @@ final class Outliner {
      *                  a loaded class cannot take is left out, and the method stays as the game defined it
      * @throws UnsupportedOperationException when the mixins ask for what a loaded class cannot do
      */
-    static Outline outline(ClassFiles classes, ClassNode baseline, ClassNode mixed, String companionName, boolean isRelaxed,
-            boolean isInitialized) {
+    static Outline outline(ClassFiles classes, ClassNode baseline, ClassNode mixed, String companionName,
+            boolean isRelaxed, boolean isInitialized) {
         Outliner outliner = new Outliner(classes, baseline, companionName);
         rename(baseline, mixed);
         outliner.initializeFields(mixed);
@@ -112,12 +122,14 @@ final class Outliner {
                     if (method.instructions.size() > 0) {
                         outliner.add(method);
                     }
-                } else if (code(before, 0, before.instructions.size()).equals(code(method, 0, method.instructions.size()))) {
+                } else if (code(before, 0, before.instructions.size())
+                        .equals(code(method, 0, method.instructions.size()))) {
                     methods.add(before);
                 } else if (method.name.equals("<init>")) {
                     methods.add(outliner.splitConstructor(before, method));
                 } else {
-                    methods.add(outliner.trampoline(before, outliner.move(method, method.name, method.instructions, method.tryCatchBlocks)));
+                    methods.add(outliner.trampoline(before,
+                            outliner.move(method, method.name, method.instructions, method.tryCatchBlocks)));
                 }
             } catch (UnsupportedOperationException e) {
                 if (!isRelaxed) {
@@ -137,7 +149,8 @@ final class Outliner {
 
         List<String> interfaces = new ArrayList<>(mixed.interfaces);
         interfaces.removeAll(baseline.interfaces);
-        return new Outline(baseline, outliner.companion, interfaces, outliner.added, outliner.initializer, outliner.fields, outliner.skipped);
+        return new Outline(baseline, outliner.companion, interfaces, outliner.added, outliner.initializer,
+                outliner.fields, outliner.skipped);
     }
 
     private static void workAroundJdk8376185(ClassNode redefined) {
@@ -167,7 +180,9 @@ final class Outliner {
             // super call when the constructor makes another object of the class, as NeoForge's Pack does.
             int start = cut + 1;
             for (int i = code.length - 1; i > cut; i--) {
-                if (code[i] instanceof MethodInsnNode call && call.getOpcode() == Opcodes.INVOKESPECIAL && call.name.equals("<init>")
+                if (code[i] instanceof MethodInsnNode call
+                        && call.getOpcode() == Opcodes.INVOKESPECIAL
+                        && call.name.equals("<init>")
                         && (call.owner.equals(mixed.name) || call.owner.equals(mixed.superName))) {
                     start = i + 1;
                     break;
@@ -175,7 +190,9 @@ final class Outliner {
             }
             for (int i = start; i < code.length; i++) {
                 // Each initializer is the object, its value and the put; the class's own come along in between.
-                if (code[i] instanceof FieldInsnNode put && put.getOpcode() == Opcodes.PUTFIELD && put.owner.equals(mixed.name)) {
+                if (code[i] instanceof FieldInsnNode put
+                        && put.getOpcode() == Opcodes.PUTFIELD
+                        && put.owner.equals(mixed.name)) {
                     MethodNode value = existing.contains(put.name + put.desc) || fields.containsKey(put.name) ? null
                             : fieldValue(constructor, code, start, i, put);
                     if (value != null) {
@@ -190,11 +207,14 @@ final class Outliner {
     }
 
     /** The code from {@code start} to the put as a method, null when it does more than compute from the object. */
-    private MethodNode fieldValue(MethodNode constructor, AbstractInsnNode[] code, int start, int put, FieldInsnNode field) {
+    private @Nullable MethodNode fieldValue(
+            MethodNode constructor, AbstractInsnNode[] code, int start, int put, FieldInsnNode field) {
         while (start < put && code[start].getOpcode() < 0) {
             start++;
         }
-        if (!(code[start] instanceof VarInsnNode receiver && receiver.getOpcode() == Opcodes.ALOAD && receiver.var == 0)) {
+        if (!(code[start] instanceof VarInsnNode receiver
+                && receiver.getOpcode() == Opcodes.ALOAD
+                && receiver.var == 0)) {
             return null;
         }
         Map<LabelNode, LabelNode> labels = new HashMap<>();
@@ -203,14 +223,15 @@ final class Outliner {
                 labels.put(label, new LabelNode());
             }
         }
-        MethodNode value = new MethodNode(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, field.name + "$" + companion.methods.size(),
-                "(L" + baseline.name + ";)" + field.desc, null, null);
+        MethodNode value = new MethodNode(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC,
+                field.name + "$" + companion.methods.size(), "(L" + baseline.name + ";)" + field.desc, null, null);
         for (int i = start + 1; i < put; i++) {
             AbstractInsnNode instruction = code[i];
             boolean isForeign = switch (instruction) {
                 case VarInsnNode variable -> variable.getOpcode() != Opcodes.ALOAD || variable.var != 0;
                 case IincInsnNode _ -> true;
-                case FieldInsnNode other -> other.getOpcode() == Opcodes.PUTFIELD || other.getOpcode() == Opcodes.PUTSTATIC;
+                case FieldInsnNode other ->
+                        other.getOpcode() == Opcodes.PUTFIELD || other.getOpcode() == Opcodes.PUTSTATIC;
                 case JumpInsnNode jump -> !labels.containsKey(jump.label);
                 case TableSwitchInsnNode _, LookupSwitchInsnNode _ -> true;
                 default -> instruction.getOpcode() >= Opcodes.IRETURN && instruction.getOpcode() <= Opcodes.RETURN
@@ -233,7 +254,7 @@ final class Outliner {
         value.maxLocals = 1;
         try {
             new Analyzer<>(new BasicVerifier()).analyze(companion.name, value);
-        } catch (AnalyzerException e) {
+        } catch (AnalyzerException _) {
             // The class's own code between two initializers came along, and it does not compute a value alone.
             return null;
         }
@@ -250,11 +271,11 @@ final class Outliner {
      */
     private static void rename(ClassNode loaded, ClassNode mixed) {
         Map<String, String> methods = names(
-                loaded.methods.stream().map(method -> List.of(method.name, method.desc, merger(method))).toList(),
-                mixed.methods.stream().map(method -> List.of(method.name, method.desc, merger(method))).toList());
+                loaded.methods.stream().map(method -> new Merged(method.name, method.desc, merger(method))).toList(),
+                mixed.methods.stream().map(method -> new Merged(method.name, method.desc, merger(method))).toList());
         Map<String, String> fields = names(
-                loaded.fields.stream().map(field -> List.of(field.name, field.desc, "")).toList(),
-                mixed.fields.stream().map(field -> List.of(field.name, field.desc, "")).toList());
+                loaded.fields.stream().map(field -> new Merged(field.name, field.desc, "")).toList(),
+                mixed.fields.stream().map(field -> new Merged(field.name, field.desc, "")).toList());
         if (methods.isEmpty() && fields.isEmpty()) {
             return;
         }
@@ -272,7 +293,8 @@ final class Outliner {
                             if (dynamic.bsmArgs[i] instanceof Handle handle && handle.getOwner().equals(mixed.name)) {
                                 Map<String, String> names = handle.getTag() <= Opcodes.H_PUTSTATIC ? fields : methods;
                                 dynamic.bsmArgs[i] = new Handle(handle.getTag(), handle.getOwner(),
-                                        names.getOrDefault(handle.getName() + handle.getDesc(), handle.getName()), handle.getDesc(), handle.isInterface());
+                                        names.getOrDefault(handle.getName() + handle.getDesc(), handle.getName()),
+                                        handle.getDesc(), handle.isInterface());
                             }
                         }
                     }
@@ -284,38 +306,36 @@ final class Outliner {
     }
 
     /**
-     * For members (name, descriptor, merging mixin) only {@code mixed} has, by name and descriptor, the name of the
-     * one member only {@code loaded} has that differs from it in the parts Mixin counts.
+     * For members only {@code mixed} has, by name and descriptor, the name of the one member only {@code loaded}
+     * has that differs from it in the parts Mixin counts.
      */
-    private static Map<String, String> names(List<List<String>> loaded, List<List<String>> mixed) {
-        Set<String> loadedKeys = new HashSet<>();
-        loaded.forEach(member -> loadedKeys.add(member.get(0) + member.get(1)));
-        Set<String> mixedKeys = new HashSet<>();
-        mixed.forEach(member -> mixedKeys.add(member.get(0) + member.get(1)));
-        Map<List<String>, List<String>> onlyLoaded = new HashMap<>();
-        for (List<String> member : loaded) {
-            if (!mixedKeys.contains(member.get(0) + member.get(1))) {
-                onlyLoaded.merge(List.of(uncounted(member.get(0)), member.get(1), member.get(2)), List.of(member.get(0)), Outliner::ambiguous);
-            }
-        }
-        Map<List<String>, List<String>> onlyMixed = new HashMap<>();
-        for (List<String> member : mixed) {
-            if (!loadedKeys.contains(member.get(0) + member.get(1))) {
-                onlyMixed.merge(List.of(uncounted(member.get(0)), member.get(1), member.get(2)), List.of(member.get(0)), Outliner::ambiguous);
-            }
-        }
+    private static Map<String, String> names(List<Merged> loaded, List<Merged> mixed) {
+        Map<Merged, List<String>> onlyLoaded = only(loaded, mixed);
         Map<String, String> names = new HashMap<>();
-        onlyMixed.forEach((key, name) -> {
+        only(mixed, loaded).forEach((key, name) -> {
             List<String> loadedName = onlyLoaded.get(key);
             if (name.size() == 1 && loadedName != null && loadedName.size() == 1 && !name.equals(loadedName)) {
-                names.put(name.getFirst() + key.get(1), loadedName.getFirst());
+                names.put(name.getFirst() + key.desc(), loadedName.getFirst());
             }
         });
         return names;
     }
 
-    private static List<String> ambiguous(List<String> first, List<String> second) {
-        return List.of();
+    /**
+     * The names of the members {@code others} lacks, by what they are without Mixin's counters; no name where
+     * several are the same without them.
+     */
+    private static Map<Merged, List<String>> only(List<Merged> members, List<Merged> others) {
+        Set<String> otherKeys = new HashSet<>();
+        others.forEach(member -> otherKeys.add(member.name() + member.desc()));
+        Map<Merged, List<String>> only = new HashMap<>();
+        for (Merged member : members) {
+            if (!otherKeys.contains(member.name() + member.desc())) {
+                only.merge(new Merged(uncounted(member.name()), member.desc(), member.mixin()),
+                        List.of(member.name()), (_, _) -> List.of());
+            }
+        }
+        return only;
     }
 
     /** The name without the counters and the run id Mixin puts into handler, unique method and unique field names. */
@@ -351,17 +371,20 @@ final class Outliner {
         }
         if (overridden != null && (overridden.access() & (Opcodes.ACC_STATIC | Opcodes.ACC_PRIVATE)) == 0) {
             // The JVM dispatches by the methods a class has; one that is not there never gets the call.
-            throw new UnsupportedOperationException("a mixin overrides " + overridden.declaring().name.replace('/', '.') + "."
-                    + method.name + " in " + baseline.name.replace('/', '.') + ", which a loaded class cannot take");
+            throw new UnsupportedOperationException("a mixin overrides "
+                    + overridden.declaring().name.replace('/', '.') + "." + method.name + " in "
+                    + baseline.name.replace('/', '.') + ", which a loaded class cannot take");
         }
         added.put(method.name + method.desc, move(method, method.name, method.instructions, method.tryCatchBlocks));
     }
 
     /** Puts a static copy of the method into the companion, with these instructions for its body. */
-    private MethodNode move(MethodNode method, String name, InsnList instructions, List<TryCatchBlockNode> tryCatchBlocks) {
+    private MethodNode move(
+            MethodNode method, String name, InsnList instructions, List<TryCatchBlockNode> tryCatchBlocks) {
         boolean isStatic = (method.access & Opcodes.ACC_STATIC) != 0;
         MethodNode moved = new MethodNode(
-                Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC | (method.access & (Opcodes.ACC_SYNTHETIC | Opcodes.ACC_VARARGS)),
+                Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC
+                        | (method.access & (Opcodes.ACC_SYNTHETIC | Opcodes.ACC_VARARGS)),
                 name.replaceAll("[<>]", "") + "$" + companion.methods.size(),
                 isStatic ? method.desc : "(L" + baseline.name + ";" + method.desc.substring(1),
                 null,
@@ -396,7 +419,8 @@ final class Outliner {
             method.instructions.add(new VarInsnNode(argument.getOpcode(Opcodes.ILOAD), local));
             local += argument.getSize();
         }
-        method.instructions.add(new InvokeDynamicInsnNode(moved.name, moved.desc, Rewriter.LINK, "companion", companion.name.replace('/', '.')));
+        method.instructions.add(new InvokeDynamicInsnNode(
+                moved.name, moved.desc, Rewriter.LINK, "companion", companion.name.replace('/', '.')));
         method.instructions.add(new InsnNode(Type.getReturnType(method.desc).getOpcode(Opcodes.IRETURN)));
         method.maxStack = Math.max(method.maxStack, Math.max(local, 2));
         method.maxLocals = Math.max(method.maxLocals, local);
@@ -411,14 +435,16 @@ final class Outliner {
         int afterCut = superCall(after);
         String where = baseline.name.replace('/', '.');
         if (beforeCut < 0 || afterCut < 0 || !code(before, 0, beforeCut + 1).equals(code(after, 0, afterCut + 1))) {
-            throw new UnsupportedOperationException("a mixin changes a constructor of " + where + " before its super call");
+            throw new UnsupportedOperationException(
+                    "a mixin changes a constructor of " + where + " before its super call");
         }
         AbstractInsnNode[] prefix = before.instructions.toArray();
         for (int i = 0; i <= beforeCut; i++) {
             int opcode = prefix[i].getOpcode();
             if (prefix[i] instanceof IincInsnNode || opcode >= Opcodes.ISTORE && opcode <= Opcodes.ASTORE) {
                 // The moved part would read a local variable it never got.
-                throw new UnsupportedOperationException("a constructor of " + where + " keeps a local variable across its super call");
+                throw new UnsupportedOperationException(
+                        "a constructor of " + where + " keeps a local variable across its super call");
             }
         }
         MethodNode rest = move(after, "init", new InsnList(), new ArrayList<>());
@@ -451,7 +477,7 @@ final class Outliner {
      * The class has run its static initializer. Mixin appends to it, so what it appended becomes a method
      * for the loader to run once.
      */
-    private void initialize(MethodNode before, MethodNode after) {
+    private void initialize(@Nullable MethodNode before, MethodNode after) {
         int start = 0;
         if (before != null) {
             if (code(before, 0, before.instructions.size()).equals(code(after, 0, after.instructions.size()))) {
@@ -470,8 +496,10 @@ final class Outliner {
                 ran -= after.instructions.get(start).getOpcode() >= 0 ? 1 : 0;
             }
             if (!code(before, 0, end).equals(code(after, 0, start))) {
-                // shortcut: what the mixins append is dropped along with what they changed; tell the two apart once a mod needs both
-                skipped.add("a change to the static initializer of " + baseline.name.replace('/', '.') + ", which has already run");
+                // shortcut: what the mixins append is dropped along with what they changed; tell the two apart once
+                // a mod needs both
+                skipped.add("a change to the static initializer of " + baseline.name.replace('/', '.')
+                        + ", which has already run");
                 return;
             }
         }
@@ -480,9 +508,13 @@ final class Outliner {
         appended.maxLocals = after.maxLocals;
         copy(after, start, appended, baseline.name.replace('/', '.'));
         for (AbstractInsnNode instruction : appended.instructions) {
-            // Only the class's own static initializer may set its final fields, and compiled code may have their values built in.
-            if (instruction instanceof FieldInsnNode put && put.getOpcode() == Opcodes.PUTSTATIC && put.owner.equals(baseline.name)
-                    && baseline.fields.stream().anyMatch(field -> field.name.equals(put.name) && (field.access & Opcodes.ACC_FINAL) != 0)) {
+            // Only the class's own static initializer may set its final fields, and compiled code may have their
+            // values built in.
+            if (instruction instanceof FieldInsnNode put
+                    && put.getOpcode() == Opcodes.PUTSTATIC
+                    && put.owner.equals(baseline.name)
+                    && baseline.fields.stream().anyMatch(
+                            field -> field.name.equals(put.name) && (field.access & Opcodes.ACC_FINAL) != 0)) {
                 throw new UnsupportedOperationException("code a mixin appends to the static initializer of "
                         + baseline.name.replace('/', '.') + " sets its final field " + put.name);
             }
@@ -507,23 +539,27 @@ final class Outliner {
             List<LabelNode> named = switch (instructions[i]) {
                 case JumpInsnNode jump -> List.of(jump.label);
                 case TableSwitchInsnNode table -> Stream.concat(Stream.of(table.dflt), table.labels.stream()).toList();
-                case LookupSwitchInsnNode lookup -> Stream.concat(Stream.of(lookup.dflt), lookup.labels.stream()).toList();
+                case LookupSwitchInsnNode lookup ->
+                        Stream.concat(Stream.of(lookup.dflt), lookup.labels.stream()).toList();
                 case LineNumberNode line -> List.of(line.start);
                 default -> List.of();
             };
             if (labels.keySet().containsAll(named)) {
                 to.instructions.add(instructions[i].clone(labels));
             } else if (!(instructions[i] instanceof LineNumberNode)) {
-                throw new UnsupportedOperationException("code a mixin adds to " + where + " jumps into code that has already run");
+                throw new UnsupportedOperationException(
+                        "code a mixin adds to " + where + " jumps into code that has already run");
             }
         }
         for (TryCatchBlockNode block : from.tryCatchBlocks) {
             boolean isBefore = !labels.containsKey(block.start);
             if (isBefore != !labels.containsKey(block.end) || isBefore != !labels.containsKey(block.handler)) {
-                throw new UnsupportedOperationException("a try block in " + where + " spans code a mixin adds and code that has already run");
+                throw new UnsupportedOperationException(
+                        "a try block in " + where + " spans code a mixin adds and code that has already run");
             }
             if (!isBefore) {
-                to.tryCatchBlocks.add(new TryCatchBlockNode(labels.get(block.start), labels.get(block.end), labels.get(block.handler), block.type));
+                to.tryCatchBlocks.add(new TryCatchBlockNode(
+                        labels.get(block.start), labels.get(block.end), labels.get(block.handler), block.type));
             }
         }
     }
@@ -548,7 +584,7 @@ final class Outliner {
                 return "java/lang/Object";
             }
 
-            private String superName(String name) {
+            private @Nullable String superName(String name) {
                 ClassNode node = classes.get(name);
                 return node == null || (node.access & Opcodes.ACC_INTERFACE) != 0 ? null : node.superName;
             }
@@ -586,12 +622,15 @@ final class Outliner {
                 case TypeInsnNode type -> code.add(type.desc);
                 case FieldInsnNode field -> code.add(field.owner + '.' + field.name + ':' + field.desc);
                 case MethodInsnNode call -> code.add(call.owner + '.' + call.name + call.desc);
-                case InvokeDynamicInsnNode dynamic -> code.add(List.of(dynamic.name, dynamic.desc, dynamic.bsm, List.of(dynamic.bsmArgs)));
+                case InvokeDynamicInsnNode dynamic ->
+                        code.add(List.of(dynamic.name, dynamic.desc, dynamic.bsm, List.of(dynamic.bsmArgs)));
                 case JumpInsnNode jump -> code.add(positions.get(jump.label));
                 case LdcInsnNode constant -> code.add(constant.cst);
                 case IincInsnNode increment -> code.add(List.of(increment.var, increment.incr));
-                case TableSwitchInsnNode table -> code.add(List.of(table.min, positions.get(table.dflt), table.labels.stream().map(positions::get).toList()));
-                case LookupSwitchInsnNode lookup -> code.add(List.of(lookup.keys, positions.get(lookup.dflt), lookup.labels.stream().map(positions::get).toList()));
+                case TableSwitchInsnNode table -> code.add(List.of(table.min, positions.get(table.dflt),
+                        table.labels.stream().map(positions::get).toList()));
+                case LookupSwitchInsnNode lookup -> code.add(List.of(lookup.keys, positions.get(lookup.dflt),
+                        lookup.labels.stream().map(positions::get).toList()));
                 case MultiANewArrayInsnNode array -> code.add(List.of(array.desc, array.dims));
                 default -> {
                 }
@@ -599,7 +638,8 @@ final class Outliner {
         }
         if (start == 0 && end == method.instructions.size()) {
             for (TryCatchBlockNode block : method.tryCatchBlocks) {
-                code.add(List.of(positions.get(block.start), positions.get(block.end), positions.get(block.handler), String.valueOf(block.type)));
+                code.add(List.of(positions.get(block.start), positions.get(block.end),
+                        positions.get(block.handler), String.valueOf(block.type)));
             }
         }
         return code;

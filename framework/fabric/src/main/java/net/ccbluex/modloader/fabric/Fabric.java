@@ -7,6 +7,7 @@ import java.io.InputStreamReader;
 import java.io.Reader;
 import java.io.UncheckedIOException;
 import java.lang.instrument.Instrumentation;
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -20,6 +21,7 @@ import net.ccbluex.modloader.Framework;
 import net.ccbluex.modloader.ModFile;
 import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.loader.impl.launch.FabricLauncherBase;
+import org.jspecify.annotations.Nullable;
 
 /**
  * @agent claude-fable-5-2
@@ -35,7 +37,8 @@ public final class Fabric implements Framework {
     @Override
     public boolean isPresent() {
         // Quilt Loader ships Fabric Loader's classes, but its own class loader and mod list.
-        return Framework.hasClass("net.fabricmc.loader.impl.launch.knot.Knot") && !Framework.hasClass("org.quiltmc.loader.api.QuiltLoader");
+        return Framework.hasClass("net.fabricmc.loader.impl.launch.knot.Knot")
+                && !Framework.hasClass("org.quiltmc.loader.api.QuiltLoader");
     }
 
     @Override
@@ -53,7 +56,7 @@ public final class Fabric implements Framework {
      * in runs no Mixin over the game's classes.
      */
     @Override
-    public byte[] preMixinClass(String name) {
+    public byte @Nullable [] preMixinClass(String name) {
         if (isBroughtIn()) {
             return null;
         }
@@ -77,75 +80,83 @@ public final class Fabric implements Framework {
      * starts it, and returns Fabric Language Kotlin when a mod depends on it and the Fabric API modules the mods use.
      */
     @Override
-    public List<Path> bringIn(List<ModFile> mods, Instrumentation instrumentation) throws IOException {
+    public @Nullable List<Path> bringIn(List<ModFile> mods, Instrumentation instrumentation) throws IOException {
         Set<String> needed = new HashSet<>();
         mods.forEach(mod -> needed.addAll(mod.dependencies()));
+        boolean hasFabricDependency = needed.stream()
+                .anyMatch(id -> id.equals("fabricloader") || id.equals("fabric") || id.startsWith("fabric-"));
         // Quilt runs Fabric mods itself.
-        if (Framework.hasClass("org.quiltmc.loader.api.QuiltLoader")
-                || needed.stream().noneMatch(id -> id.equals("fabricloader") || id.equals("fabric") || id.startsWith("fabric-"))) {
+        if (!hasFabricDependency || Framework.hasClass("org.quiltmc.loader.api.QuiltLoader")) {
             return null;
         }
         if (!isPresent() && Framework.hasClass("net.fabricmc.loader.api.FabricLoader")) {
-            throw new IllegalStateException("the game runs its Fabric mods through a layer of its own, such as Sinytra Connector or Fabricated, beside which Fabric Loader cannot start");
+            throw new IllegalStateException("the game runs its Fabric mods through a layer of its own, such as "
+                    + "Sinytra Connector or Fabricated, beside which Fabric Loader cannot start");
         }
-        String version;
-        Path directory;
         try {
-            ClassLoader game = Fabric.class.getClassLoader();
-            Object current = Class.forName("net.minecraft.SharedConstants", false, game).getMethod("getCurrentVersion").invoke(null);
-            version = (String) Class.forName("net.minecraft.WorldVersion", false, game).getMethod("id").invoke(current);
-            if (Framework.hasClass("net.minecraft.client.Minecraft")) {
-                Class<?> minecraft = Class.forName("net.minecraft.client.Minecraft", false, game);
-                directory = ((File) minecraft.getField("gameDirectory").get(minecraft.getMethod("getInstance").invoke(null))).toPath();
-            } else {
-                // A dedicated server runs in its directory.
-                directory = Path.of("").toAbsolutePath();
+            String version = gameVersion();
+            Path directory = gameDirectory();
+            // Everything is fetched before anything changes in the game.
+            Path cache = directory.resolve(".modloader").resolve(version);
+            Downloads downloads = new Downloads(cache, version);
+            List<Path> loader = downloads.fabricLoader();
+            List<Path> jars = new ArrayList<>();
+            if (needed.contains("fabric-language-kotlin")) {
+                jars.add(downloads.modrinth("fabric-language-kotlin"));
             }
+            Path api = downloads.modrinth("fabric-api");
+            // The first is the jar that was loaded; the mods bundled in it come from inside it.
+            jars.addAll(new FabricApi(api, cache.resolve("fabric-api")).used(mods.getFirst().path, needed));
+            // Fabric Loader comes in once; the next mods, or the same after a failed load, still need their modules.
+            if (!isPresent()) {
+                appendToClassPath(loader, instrumentation);
+                RunningGame.start(loader.getFirst(), version, directory);
+            }
+            if (needed.contains("fabric-api") && !isLoaded("fabric-api")) {
+                RunningGame.standIn(api, "fabric-api", apiVersion(api), "Fabric API");
+            }
+            return jars;
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException(e);
         }
-        // Everything is fetched before anything changes in the game.
-        Path cache = directory.resolve(".modloader").resolve(version);
-        Downloads downloads = new Downloads(cache, version);
-        List<Path> loader = downloads.fabricLoader();
-        List<Path> jars = new ArrayList<>();
-        if (needed.contains("fabric-language-kotlin")) {
-            jars.add(downloads.modrinth("fabric-language-kotlin"));
+    }
+
+    private static String gameVersion() throws ReflectiveOperationException {
+        ClassLoader game = Fabric.class.getClassLoader();
+        Object current = Class.forName("net.minecraft.SharedConstants", false, game)
+                .getMethod("getCurrentVersion")
+                .invoke(null);
+        return (String) Class.forName("net.minecraft.WorldVersion", false, game).getMethod("id").invoke(current);
+    }
+
+    private static Path gameDirectory() throws ReflectiveOperationException {
+        if (!Framework.hasClass("net.minecraft.client.Minecraft")) {
+            // A dedicated server runs in its directory.
+            return Path.of("").toAbsolutePath();
         }
-        Path api = downloads.modrinth("fabric-api");
-        // The first is the jar that was loaded; the mods bundled in it come from inside it.
-        jars.addAll(new FabricApi(api, cache.resolve("fabric-api")).used(mods.getFirst().path, needed));
-        // Fabric Loader comes in once; the next mods, or the same after a failed load, still need their modules.
+        Class<?> minecraft = Class.forName("net.minecraft.client.Minecraft", false, Fabric.class.getClassLoader());
+        Field directory = minecraft.getField("gameDirectory");
+        return ((File) directory.get(minecraft.getMethod("getInstance").invoke(null))).toPath();
+    }
+
+    /** Puts Fabric Loader, the first of the jars, and the libraries the game lacks on its class path for good. */
+    private void appendToClassPath(List<Path> loader, Instrumentation instrumentation) throws IOException {
+        for (Path jar : loader) {
+            JarFile file = new JarFile(jar.toFile());
+            // A library the game has already, such as the Mixin of NeoForge, stays the game's.
+            if (jar == loader.getFirst() || !hasClassOf(file)) {
+                instrumentation.appendToSystemClassLoaderSearch(file);
+            }
+        }
         if (!isPresent()) {
-            for (Path jar : loader) {
-                JarFile file = new JarFile(jar.toFile());
-                // A library the game has already, such as the Mixin of NeoForge, stays the game's.
-                if (jar == loader.getFirst() || !hasClassOf(file)) {
-                    instrumentation.appendToSystemClassLoaderSearch(file);
-                }
-            }
-            if (!isPresent()) {
-                throw new IllegalStateException("the game's class loader does not reach Fabric Loader on the class path");
-            }
-            try {
-                RunningGame.start(loader.getFirst(), version, directory);
-            } catch (ReflectiveOperationException e) {
-                throw new IllegalStateException(e);
-            }
+            throw new IllegalStateException("the game's class loader does not reach Fabric Loader on the class path");
         }
-        if (needed.contains("fabric-api") && !isLoaded("fabric-api")) {
-            try {
-                RunningGame.standIn(api, "fabric-api", apiVersion(api), "Fabric API");
-            } catch (ReflectiveOperationException e) {
-                throw new IllegalStateException(e);
-            }
-        }
-        return jars;
     }
 
     private static String apiVersion(Path api) throws IOException {
         try (JarFile file = new JarFile(api.toFile());
-                Reader reader = new InputStreamReader(file.getInputStream(file.getEntry("fabric.mod.json")), StandardCharsets.UTF_8)) {
+                Reader reader = new InputStreamReader(
+                        file.getInputStream(file.getEntry("fabric.mod.json")), StandardCharsets.UTF_8)) {
             return JsonParser.parseReader(reader).getAsJsonObject().get("version").getAsString();
         }
     }
@@ -154,9 +165,12 @@ public final class Fabric implements Framework {
     private static boolean hasClassOf(JarFile jar) {
         return jar.stream()
                 .map(JarEntry::getName)
-                .filter(name -> name.endsWith(".class") && !name.startsWith("META-INF/") && !name.equals("module-info.class"))
+                .filter(name -> name.endsWith(".class")
+                        && !name.startsWith("META-INF/")
+                        && !name.equals("module-info.class"))
                 .findFirst()
-                .map(name -> Framework.hasClass(name.substring(0, name.length() - ".class".length()).replace('/', '.')))
+                .map(name -> name.substring(0, name.length() - ".class".length()).replace('/', '.'))
+                .map(Framework::hasClass)
                 .orElse(true);
     }
 
@@ -167,7 +181,7 @@ public final class Fabric implements Framework {
     }
 
     @Override
-    public ModFile read(Path jar) throws IOException {
+    public @Nullable ModFile read(Path jar) throws IOException {
         try (JarFile file = new JarFile(jar.toFile())) {
             JarEntry metadata = file.getJarEntry("fabric.mod.json");
             if (metadata == null) {

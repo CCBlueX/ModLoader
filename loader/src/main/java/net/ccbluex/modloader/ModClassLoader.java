@@ -25,6 +25,7 @@ import java.util.Set;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import net.ccbluex.modloader.mixin.MixinManager;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Loads one mod. Sees the game through its parent and the other loaded mods as siblings.
@@ -67,7 +68,8 @@ public final class ModClassLoader extends URLClassLoader {
                     descriptor.packages(Set.of(path.substring(0, path.lastIndexOf('/')).replace('/', '.')));
                 } else if (path.startsWith("META-INF/services/") && !entry.isDirectory()) {
                     // A module's services are only found when its descriptor names them.
-                    List<String> providers = new String(file.getInputStream(entry).readAllBytes(), StandardCharsets.UTF_8).lines()
+                    String services = new String(file.getInputStream(entry).readAllBytes(), StandardCharsets.UTF_8);
+                    List<String> providers = services.lines()
                             .map(line -> line.replaceAll("#.*", "").strip())
                             .filter(line -> !line.isEmpty())
                             .toList();
@@ -101,12 +103,12 @@ public final class ModClassLoader extends URLClassLoader {
 
     /** Classes and resources of a named module are asked for by module name; there is one module per loader. */
     @Override
-    protected Class<?> findClass(String moduleName, String name) {
+    protected @Nullable Class<?> findClass(String moduleName, String name) {
         return findOwnClass(name);
     }
 
     @Override
-    protected URL findResource(String moduleName, String name) {
+    protected @Nullable URL findResource(String moduleName, String name) {
         return findResource(name);
     }
 
@@ -123,7 +125,7 @@ public final class ModClassLoader extends URLClassLoader {
 
     /** Then the other loaded mods' own resources, which a framework with one class loader for all mods shows too. */
     @Override
-    public URL getResource(String name) {
+    public @Nullable URL getResource(String name) {
         URL kotlin = isModFirst(name) ? findModResource(name) : null;
         if (kotlin != null) {
             return kotlin;
@@ -132,7 +134,7 @@ public final class ModClassLoader extends URLClassLoader {
         return found != null ? found : findModResource(name);
     }
 
-    private URL findModResource(String name) {
+    private @Nullable URL findModResource(String name) {
         URL found = findResource(name);
         for (Mod mod : mods) {
             if (found == null && mod.classLoader != this) {
@@ -177,7 +179,7 @@ public final class ModClassLoader extends URLClassLoader {
         return found;
     }
 
-    private Class<?> findModClass(String name) {
+    private @Nullable Class<?> findModClass(String name) {
         Class<?> found = findOwnClass(name);
         for (Mod mod : mods) {
             if (found == null && mod.classLoader != this) {
@@ -188,7 +190,7 @@ public final class ModClassLoader extends URLClassLoader {
     }
 
     /** A class from the jars of this mod, null when they have none by that name. */
-    Class<?> findOwnClass(String name) {
+    @Nullable Class<?> findOwnClass(String name) {
         URL resource = findResource(name.replace('.', '/') + ".class");
         if (resource == null) {
             return null;
@@ -200,7 +202,8 @@ public final class ModClassLoader extends URLClassLoader {
             }
             try (InputStream in = resource.openStream()) {
                 byte[] bytes = mixins.rewrite(this, in.readAllBytes());
-                return defineClass(name, bytes, 0, bytes.length, new CodeSource(jar.toUri().toURL(), (Certificate[]) null));
+                CodeSource source = new CodeSource(jar.toUri().toURL(), (Certificate[]) null);
+                return defineClass(name, bytes, 0, bytes.length, source);
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }

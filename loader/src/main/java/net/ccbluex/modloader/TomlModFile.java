@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A mod of the Forge family: described by a mods.toml, started through {@code @Mod} classes, bundling jars
@@ -27,13 +28,14 @@ public abstract class TomlModFile extends ModFile {
     private final List<String> nestedJars;
 
     protected TomlModFile(Framework framework, Path path, Config toml, List<String> nestedJars) {
-        super(framework, path, toml.<List<Config>>get("mods").getFirst().get("modId"));
+        List<Config> mods = toml.get("mods");
+        super(framework, path, mods.getFirst().get("modId"));
         this.toml = toml;
         this.nestedJars = nestedJars;
     }
 
     /** The mods.toml at {@code entry} of the jar, or null when the jar has none or it describes no mod. */
-    public static Config read(JarFile jar, String entry) throws IOException {
+    public static @Nullable Config read(JarFile jar, String entry) throws IOException {
         JarEntry metadata = jar.getJarEntry(entry);
         if (metadata == null) {
             return null;

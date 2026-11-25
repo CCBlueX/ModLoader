@@ -19,6 +19,7 @@ import net.fabricmc.loader.impl.launch.FabricLauncherBase;
 import net.fabricmc.loader.impl.metadata.BuiltinModMetadata;
 import net.fabricmc.loader.impl.util.Arguments;
 import net.fabricmc.loader.impl.util.log.Log;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The game as Fabric Loader sees it when ModLoader brought Fabric in: what Knot and its Minecraft provider are in
@@ -50,7 +51,8 @@ final class RunningGame extends FabricLauncherBase implements GameProvider {
 
     /** A mod without code for one whose parts came in apart, as Fabric API's modules do. */
     static void standIn(Path jar, String id, String version, String name) throws ReflectiveOperationException {
-        ModContainers.add(new BuiltinMod(List.of(jar), new BuiltinModMetadata.Builder(id, version).setName(name).build()));
+        ModContainers.add(
+                new BuiltinMod(List.of(jar), new BuiltinModMetadata.Builder(id, version).setName(name).build()));
     }
 
     @Override
@@ -84,7 +86,8 @@ final class RunningGame extends FabricLauncherBase implements GameProvider {
             jar = directory;
         }
         return List.of(
-                new BuiltinMod(List.of(jar), new BuiltinModMetadata.Builder(getGameId(), version).setName(getGameName()).build()),
+                new BuiltinMod(List.of(jar),
+                        new BuiltinModMetadata.Builder(getGameId(), version).setName(getGameName()).build()),
                 new BuiltinMod(List.of(Path.of(System.getProperty("java.home"))),
                         new BuiltinModMetadata.Builder("java", System.getProperty("java.specification.version"))
                                 .setName(System.getProperty("java.vm.name"))
@@ -178,7 +181,7 @@ final class RunningGame extends FabricLauncherBase implements GameProvider {
     }
 
     @Override
-    public InputStream getResourceAsStream(String name) {
+    public @Nullable InputStream getResourceAsStream(String name) {
         return game.getResourceAsStream(name);
     }
 
@@ -189,14 +192,14 @@ final class RunningGame extends FabricLauncherBase implements GameProvider {
 
     /** As the class file says: Fabric changes no class of a game it did not start. */
     @Override
-    public byte[] getClassByteArray(String name, boolean runTransformers) throws IOException {
+    public byte @Nullable [] getClassByteArray(String name, boolean runTransformers) throws IOException {
         try (InputStream in = game.getResourceAsStream(name.replace('.', '/') + ".class")) {
             return in == null ? null : in.readAllBytes();
         }
     }
 
     @Override
-    public Manifest getManifest(Path originPath) {
+    public @Nullable Manifest getManifest(Path originPath) {
         return null;
     }
 

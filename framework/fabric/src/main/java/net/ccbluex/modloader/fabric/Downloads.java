@@ -49,8 +49,9 @@ final class Downloads {
     List<Path> fabricLoader() throws IOException {
         Path jars = directory.resolve("fabric-loader");
         if (!Files.isDirectory(jars)) {
+            String meta = "https://meta.fabricmc.net/v2/versions/loader/" + minecraft;
             String version = null;
-            for (JsonElement entry : json("https://meta.fabricmc.net/v2/versions/loader/" + minecraft).getAsJsonArray()) {
+            for (JsonElement entry : json(meta).getAsJsonArray()) {
                 JsonObject loader = entry.getAsJsonObject().getAsJsonObject("loader");
                 if (version == null && loader.get("stable").getAsBoolean()) {
                     version = loader.get("version").getAsString();
@@ -62,19 +63,21 @@ final class Downloads {
             Files.createDirectories(directory);
             // Filled apart and moved in whole: the directory stands for a complete download.
             Path part = Files.createTempDirectory(directory, "fabric-loader");
-            JsonObject profile = json("https://meta.fabricmc.net/v2/versions/loader/" + minecraft + "/" + version + "/profile/json").getAsJsonObject();
+            JsonObject profile = json(meta + "/" + version + "/profile/json").getAsJsonObject();
             for (JsonElement entry : profile.getAsJsonArray("libraries")) {
                 JsonObject library = entry.getAsJsonObject();
                 String[] name = library.get("name").getAsString().split(":");
-                String url = library.get("url").getAsString() + name[0].replace('.', '/') + "/" + name[1] + "/" + name[2] + "/"
-                        + name[1] + "-" + name[2] + ".jar";
+                String url = library.get("url").getAsString() + name[0].replace('.', '/') + "/" + name[1] + "/"
+                        + name[2] + "/" + name[1] + "-" + name[2] + ".jar";
                 // The file holds the hash, sometimes followed by the file name.
                 download(url, text(url + ".sha512").strip().split("\\s+")[0], part.resolve(name[1] + ".jar"));
             }
             Files.move(part, jars, StandardCopyOption.ATOMIC_MOVE);
         }
         try (Stream<Path> files = Files.list(jars)) {
-            return files.sorted(Comparator.comparing(file -> !file.getFileName().toString().equals("fabric-loader.jar"))).toList();
+            return files
+                    .sorted(Comparator.comparing(file -> !file.getFileName().toString().equals("fabric-loader.jar")))
+                    .toList();
         }
     }
 
@@ -111,7 +114,8 @@ final class Downloads {
         System.out.println("[ModLoader] downloading " + url);
         byte[] bytes = get(url, HttpResponse.BodyHandlers.ofByteArray());
         try {
-            if (!HexFormat.of().formatHex(MessageDigest.getInstance("SHA-512").digest(bytes)).equalsIgnoreCase(sha512)) {
+            String hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-512").digest(bytes));
+            if (!hash.equalsIgnoreCase(sha512)) {
                 throw new IOException(url + " does not match the checksum its server gives");
             }
         } catch (NoSuchAlgorithmException e) {

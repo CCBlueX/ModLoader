@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Enumeration;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Runs the compiler with the Mixin and ASM shipped with it, whatever versions the game has, and reads the
@@ -35,7 +36,7 @@ final class CompilerClassLoader extends URLClassLoader {
             if (loaded == null && !name.startsWith("java.")) {
                 try {
                     loaded = findClass(name);
-                } catch (ClassNotFoundException e) {
+                } catch (ClassNotFoundException _) {
                     // not ours
                 }
             }
@@ -69,7 +70,8 @@ final class CompilerClassLoader extends URLClassLoader {
             }
             try (InputStream in = file.openStream()) {
                 byte[] bytes = in.readAllBytes();
-                if (!isMixinType && !pluginJars.contains(jar) && !redefinedPackages.contains(folder) && !usesMixin(bytes)) {
+                if (!isMixinType && !pluginJars.contains(jar) && !redefinedPackages.contains(folder)
+                        && !usesMixin(bytes)) {
                     throw e;
                 }
                 if (isMixinType) {
@@ -85,14 +87,16 @@ final class CompilerClassLoader extends URLClassLoader {
 
     private static boolean usesMixin(byte[] bytes) {
         String constants = new String(bytes, StandardCharsets.ISO_8859_1);
-        return constants.contains("org/objectweb/asm/") || constants.contains("org/spongepowered/") || constants.contains("com/llamalad7/mixinextras/");
+        return constants.contains("org/objectweb/asm/") || constants.contains("org/spongepowered/")
+                || constants.contains("com/llamalad7/mixinextras/");
     }
 
-    private static boolean extendsMixin(Class<?> type) {
+    private static boolean extendsMixin(@Nullable Class<?> type) {
         if (type == null) {
             return false;
         }
-        if (type.getName().startsWith("org.spongepowered.") || type.getName().startsWith("com.llamalad7.mixinextras.")) {
+        String name = type.getName();
+        if (name.startsWith("org.spongepowered.") || name.startsWith("com.llamalad7.mixinextras.")) {
             return true;
         }
         for (Class<?> implemented : type.getInterfaces()) {
@@ -104,7 +108,7 @@ final class CompilerClassLoader extends URLClassLoader {
     }
 
     @Override
-    public URL getResource(String name) {
+    public @Nullable URL getResource(String name) {
         URL own = findResource(name);
         return own != null ? own : super.getResource(name);
     }

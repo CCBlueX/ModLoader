@@ -1,5 +1,6 @@
 package net.ccbluex.modloader.mixin.compiler;
 
+import org.jspecify.annotations.Nullable;
 import org.spongepowered.asm.logging.Level;
 import org.spongepowered.asm.logging.LoggerAdapterAbstract;
 
@@ -9,7 +10,7 @@ import org.spongepowered.asm.logging.LoggerAdapterAbstract;
  * @agent claude-fable-5-2
  */
 final class StderrLogger extends LoggerAdapterAbstract {
-    static RuntimeException failure;
+    static @Nullable RuntimeException failure;
 
     StderrLogger(String name) {
         super(name);
@@ -32,7 +33,7 @@ final class StderrLogger extends LoggerAdapterAbstract {
     }
 
     @Override
-    public void log(Level level, String message, Throwable t) {
+    public void log(Level level, String message, @Nullable Throwable t) {
         if (level.compareTo(Level.WARN) > 0) {
             return;
         }

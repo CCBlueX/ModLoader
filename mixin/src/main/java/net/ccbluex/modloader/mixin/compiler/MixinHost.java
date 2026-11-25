@@ -1,6 +1,7 @@
 package net.ccbluex.modloader.mixin.compiler;
 
 import net.ccbluex.modloader.Framework;
+import org.jspecify.annotations.Nullable;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
@@ -61,9 +62,12 @@ import java.util.stream.Collectors;
  * @agent claude-opus-5-5
  */
 public final class MixinHost implements IMixinService, IClassProvider, IClassBytecodeProvider {
-    static Function<String, byte[]> sources;
-    static Function<String, byte[]> classes;
+    @SuppressWarnings("NullAway.Init")
+    static Function<String, byte @Nullable []> sources;
+    @SuppressWarnings("NullAway.Init") // the session sets it before Mixin creates the host
+    static Function<String, byte @Nullable []> classes;
     static boolean client;
+    @SuppressWarnings("NullAway.Init") // Mixin offers it while the session starts it
     static IMixinTransformerFactory transformers;
     /** Mixin packages of the mods running outside their own framework, see {@link #relax}. */
     static final Set<String> relaxedPackages = new HashSet<>();
@@ -134,18 +138,18 @@ public final class MixinHost implements IMixinService, IClassProvider, IClassByt
     }
 
     @Override
-    public ITransformerProvider getTransformerProvider() {
+    public @Nullable ITransformerProvider getTransformerProvider() {
         return null;
     }
 
     /** Without a tracker Mixin cannot find that a target "was loaded too early"; here every target already is. */
     @Override
-    public IClassTracker getClassTracker() {
+    public @Nullable IClassTracker getClassTracker() {
         return null;
     }
 
     @Override
-    public IMixinAuditTrail getAuditTrail() {
+    public @Nullable IMixinAuditTrail getAuditTrail() {
         return null;
     }
 
@@ -175,7 +179,7 @@ public final class MixinHost implements IMixinService, IClassProvider, IClassByt
     }
 
     @Override
-    public InputStream getResourceAsStream(String name) {
+    public @Nullable InputStream getResourceAsStream(String name) {
         // Quilt names the configs of its mods "#<mod id>:<resource>".
         return loader.getResourceAsStream(name.startsWith("#") ? name.substring(name.indexOf(':') + 1) : name);
     }
@@ -232,7 +236,8 @@ public final class MixinHost implements IMixinService, IClassProvider, IClassByt
     }
 
     @Override
-    public ClassNode getClassNode(String name, boolean runTransformers, int readerFlags) throws ClassNotFoundException, IOException {
+    public ClassNode getClassNode(String name, boolean runTransformers, int readerFlags)
+            throws ClassNotFoundException, IOException {
         byte[] bytes = bytes(name);
         if (bytes == null) {
             throw new ClassNotFoundException(name);
@@ -247,7 +252,7 @@ public final class MixinHost implements IMixinService, IClassProvider, IClassByt
         return node;
     }
 
-    private byte[] bytes(String name) throws IOException {
+    private byte @Nullable [] bytes(String name) throws IOException {
         String binaryName = name.replace('/', '.');
         String path = binaryName.replace('.', '/') + ".class";
         byte[] framed = loader.findResource(path) == null ? sources.apply(binaryName) : null;
@@ -296,7 +301,8 @@ public final class MixinHost implements IMixinService, IClassProvider, IClassByt
         AnnotationNode mixinAnnotation = Annotations.getInvisible(mixin, Mixin.class);
         if (mixinAnnotation != null) {
             List<String> names = new ArrayList<>(Annotations.getValue(mixinAnnotation, "targets", List.<String>of()));
-            Annotations.<List<Type>>getValue(mixinAnnotation, "value", List.of()).forEach(type -> names.add(type.getClassName()));
+            Annotations.<List<Type>>getValue(mixinAnnotation, "value", List.of())
+                    .forEach(type -> names.add(type.getClassName()));
             for (String name : names) {
                 byte[] bytes = bytes(name);
                 if (bytes != null) {
@@ -309,7 +315,8 @@ public final class MixinHost implements IMixinService, IClassProvider, IClassByt
         Set<String> existing = new HashSet<>();
         targets.forEach(target -> target.methods.forEach(method -> existing.add(method.name + method.desc)));
         mixin.methods.removeIf(method -> existing.contains(method.name + method.desc)
-                && (Annotations.getVisible(method, Accessor.class) != null || Annotations.getVisible(method, Invoker.class) != null));
+                && (Annotations.getVisible(method, Accessor.class) != null
+                        || Annotations.getVisible(method, Invoker.class) != null));
         Set<String> injectors = new HashSet<>();
         InjectionInfo.getRegisteredAnnotations().forEach(type -> injectors.add(Type.getDescriptor(type)));
         for (MethodNode method : mixin.methods) {
@@ -336,7 +343,10 @@ public final class MixinHost implements IMixinService, IClassProvider, IClassByt
         }
     }
 
-    /** Points the injector at what the game's framework put in place of a method or call it names, see {@link #replacements}. */
+    /**
+     * Points the injector at what the game's framework put in place of a method or call it names, see
+     * {@link #replacements}.
+     */
     private static void replace(AnnotationNode injector, List<ClassNode> targets) {
         List<String> selectors = new ArrayList<>(Annotations.getValue(injector, "method", List.<String>of()));
         for (Framework.Replacement replacement : replacements) {
@@ -344,10 +354,12 @@ public final class MixinHost implements IMixinService, IClassProvider, IClassByt
                 if (!target.name.equals(replacement.owner())) {
                     continue;
                 }
-                if (replacement.in() == null && target.methods.stream().anyMatch(method -> method.name.equals(replacement.by()))) {
-                    selectors.replaceAll(selector -> name(selector).equals(replacement.replaced()) ? rename(selector, replacement.by()) : selector);
-                } else if (replacement.in() != null && selectors.stream().anyMatch(selector -> name(selector).equals(replacement.in()))
-                        && !calls(target, replacement.in(), replacement.replaced())) {
+                String in = replacement.in();
+                if (in == null && target.methods.stream().anyMatch(method -> method.name.equals(replacement.by()))) {
+                    selectors.replaceAll(selector -> name(selector).equals(replacement.replaced())
+                            ? rename(selector, replacement.by()) : selector);
+                } else if (in != null && selectors.stream().anyMatch(selector -> name(selector).equals(in))
+                        && !calls(target, in, replacement.replaced())) {
                     for (AnnotationNode point : points(injector)) {
                         if (replacement.replaced().equals(Annotations.getValue(point, "target"))) {
                             Annotations.setValue(point, "target", replacement.by());
@@ -363,12 +375,19 @@ public final class MixinHost implements IMixinService, IClassProvider, IClassByt
 
     private static void pin(AnnotationNode injector, MethodNode handler, List<ClassNode> targets) {
         String arguments = injector.desc.equals(Type.getDescriptor(Inject.class)) ? arguments(handler) : null;
-        List<String> points = points(injector).stream().map(point -> Annotations.<String>getValue(point, "target")).filter(Objects::nonNull).toList();
+        List<String> points = points(injector).stream()
+                .map(point -> Annotations.<String>getValue(point, "target")).filter(Objects::nonNull).toList();
         List<String> selectors = Annotations.getValue(injector, "method", List.<String>of());
         List<String> pinned = new ArrayList<>();
         for (String selector : selectors) {
-            List<MethodNode> named = selector.contains("(") || selector.contains("*") || selector.contains(":") ? List.of() : targets.stream().flatMap(target -> target.methods.stream()).filter(method -> method.name.equals(name(selector))).toList();
-            List<MethodNode> fitting = named.stream().filter(method -> arguments == null || method.desc.startsWith(arguments)).filter(method -> points.isEmpty() || points.stream().anyMatch(point -> has(method, point))).toList();
+            List<MethodNode> named = selector.contains("(") || selector.contains("*") || selector.contains(":")
+                    ? List.of()
+                    : targets.stream().flatMap(target -> target.methods.stream())
+                            .filter(method -> method.name.equals(name(selector))).toList();
+            List<MethodNode> fitting = named.stream()
+                    .filter(method -> arguments == null || method.desc.startsWith(arguments))
+                    .filter(method -> points.isEmpty() || points.stream().anyMatch(point -> has(method, point)))
+                    .toList();
             if (named.size() > 1 && !fitting.isEmpty() && fitting.size() < named.size()) {
                 fitting.forEach(method -> pinned.add(selector + method.desc));
             } else {
@@ -380,11 +399,14 @@ public final class MixinHost implements IMixinService, IClassProvider, IClassByt
         }
     }
 
-    private static String arguments(MethodNode handler) {
+    private static @Nullable String arguments(MethodNode handler) {
         Type[] parameters = Type.getArgumentTypes(handler.desc);
         for (int i = 0; i < parameters.length; i++) {
-            if (parameters[i].getDescriptor().startsWith("Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfo")) {
-                return i == 0 ? null : Arrays.stream(parameters, 0, i).map(Type::getDescriptor).collect(Collectors.joining("", "(", ")"));
+            if (parameters[i].getDescriptor()
+                    .startsWith("Lorg/spongepowered/asm/mixin/injection/callback/CallbackInfo")) {
+                return i == 0 ? null
+                        : Arrays.stream(parameters, 0, i).map(Type::getDescriptor)
+                                .collect(Collectors.joining("", "(", ")"));
             }
         }
         return null;
@@ -414,8 +436,10 @@ public final class MixinHost implements IMixinService, IClassProvider, IClassByt
 
     private static boolean has(MethodNode method, String target) {
         for (AbstractInsnNode instruction : method.instructions) {
-            if (instruction instanceof MethodInsnNode call && target.equals("L" + call.owner + ";" + call.name + call.desc)
-                    || instruction instanceof FieldInsnNode field && target.equals("L" + field.owner + ";" + field.name + ":" + field.desc)) {
+            if (instruction instanceof MethodInsnNode call
+                    && target.equals("L" + call.owner + ";" + call.name + call.desc)
+                    || instruction instanceof FieldInsnNode field
+                            && target.equals("L" + field.owner + ";" + field.name + ":" + field.desc)) {
                 return true;
             }
         }

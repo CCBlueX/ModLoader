@@ -6,6 +6,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Array;
 import java.util.Map;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A field a mixin adds to a class that is already loaded and so cannot grow. Its values live here, by
@@ -26,7 +27,8 @@ final class VirtualField {
         try {
             MethodHandles.Lookup lookup = MethodHandles.lookup();
             GET = lookup.findVirtual(VirtualField.class, "get", MethodType.methodType(Object.class, Object.class));
-            SET = lookup.findVirtual(VirtualField.class, "set", MethodType.methodType(void.class, Object.class, Object.class));
+            SET = lookup.findVirtual(VirtualField.class, "set",
+                    MethodType.methodType(void.class, Object.class, Object.class));
             GET_STATIC = lookup.findVirtual(VirtualField.class, "get", MethodType.methodType(Object.class));
             SET_STATIC = lookup.findVirtual(VirtualField.class, "set", MethodType.methodType(void.class, Object.class));
         } catch (ReflectiveOperationException e) {
@@ -37,14 +39,14 @@ final class VirtualField {
     /** Stands for null, which the map cannot hold. */
     private static final Object NULL = new Object();
 
-    private final Object zero;
+    private final @Nullable Object zero;
     /** Keyed by the instance itself, not by what it equals, and without keeping it alive. */
     private final Map<Object, Object> values = new MapMaker().weakKeys().makeMap();
-    private volatile Object staticValue;
+    private volatile @Nullable Object staticValue;
     /** {@code (Object) -> Object}, the value of the field for an instance that has none yet; null for the zero. */
-    volatile MethodHandle initializer;
+    volatile @Nullable MethodHandle initializer;
 
-    VirtualField(Class<?> type, MethodHandle initializer) {
+    VirtualField(Class<?> type, @Nullable MethodHandle initializer) {
         // Unboxing a missing value would throw, so primitives start at their zero.
         this.zero = type.isPrimitive() ? Array.get(Array.newInstance(type, 1), 0) : null;
         this.staticValue = zero;
@@ -61,15 +63,15 @@ final class VirtualField {
         return (isStatic ? SET_STATIC : SET).bindTo(this);
     }
 
-    private Object get() {
+    private @Nullable Object get() {
         return staticValue;
     }
 
-    private void set(Object value) {
+    private void set(@Nullable Object value) {
         staticValue = value;
     }
 
-    private Object get(Object instance) throws Throwable {
+    private @Nullable Object get(Object instance) throws Throwable {
         Object value = values.get(instance);
         if (value == null) {
             MethodHandle first = initializer;
@@ -82,7 +84,7 @@ final class VirtualField {
         return value == NULL ? null : value;
     }
 
-    private void set(Object instance, Object value) {
+    private void set(Object instance, @Nullable Object value) {
         values.put(instance, value == null ? NULL : value);
     }
 }

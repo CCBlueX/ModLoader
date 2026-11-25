@@ -18,6 +18,7 @@ import net.fabricmc.api.EnvType;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.loader.api.entrypoint.EntrypointContainer;
+import org.jspecify.annotations.Nullable;
 
 /**
  * @agent claude-fable-5-2
@@ -27,7 +28,7 @@ final class FabricMod extends ModFile {
 
     private final JsonObject json;
     /** The jars Knot was told to take classes from, null before {@link #register} and in a game without Knot. */
-    private URL[] jars;
+    private URL @Nullable [] jars;
 
     FabricMod(Framework framework, Path path, JsonObject json) {
         super(framework, path, json.get("id").getAsString());
@@ -41,11 +42,11 @@ final class FabricMod extends ModFile {
 
     @Override
     public List<String> nestedJars() {
-        List<String> jars = new ArrayList<>();
+        List<String> files = new ArrayList<>();
         for (JsonElement jar : array(json, "jars")) {
-            jars.add(jar.getAsJsonObject().get("file").getAsString());
+            files.add(jar.getAsJsonObject().get("file").getAsString());
         }
-        return jars;
+        return files;
     }
 
     @Override
@@ -94,7 +95,9 @@ final class FabricMod extends ModFile {
         }
     }
 
-    /** Runs every entrypoint, as Fabric does at the game's start, and then throws the first failure with the others. */
+    /**
+     * Runs every entrypoint, as Fabric does at the game's start, and then throws the first failure with the others.
+     */
     @Override
     public void start(ModClassLoader loader) {
         List<RuntimeException> failures = new ArrayList<>();
@@ -102,7 +105,8 @@ final class FabricMod extends ModFile {
         if (FabricLoader.getInstance().getEnvironmentType() == EnvType.CLIENT) {
             run("client", ClientModInitializer.class, ClientModInitializer::onInitializeClient, failures);
         } else {
-            run("server", DedicatedServerModInitializer.class, DedicatedServerModInitializer::onInitializeServer, failures);
+            run("server", DedicatedServerModInitializer.class, DedicatedServerModInitializer::onInitializeServer,
+                    failures);
         }
         if (!failures.isEmpty()) {
             failures.subList(1, failures.size()).forEach(failures.getFirst()::addSuppressed);
@@ -113,13 +117,14 @@ final class FabricMod extends ModFile {
     /** Through Fabric Loader, which keeps the instance other mods get for the same entrypoint. */
     private <T> void run(String key, Class<T> type, Consumer<T> call, List<RuntimeException> failures) {
         for (EntrypointContainer<T> entrypoint : FabricLoader.getInstance().getEntrypointContainers(key, type)) {
-            if (entrypoint.getProvider().getMetadata().getId().equals(id)) {
-                try {
-                    call.accept(entrypoint.getEntrypoint());
-                } catch (RuntimeException | LinkageError e) {
-                    failures.add(new IllegalStateException("the " + key + " entrypoint " + entrypoint.getDefinition() + " of " + id
-                            + ", which fails: " + e, e));
-                }
+            if (!entrypoint.getProvider().getMetadata().getId().equals(id)) {
+                continue;
+            }
+            try {
+                call.accept(entrypoint.getEntrypoint());
+            } catch (RuntimeException | LinkageError e) {
+                failures.add(new IllegalStateException("the " + key + " entrypoint " + entrypoint.getDefinition()
+                        + " of " + id + ", which fails: " + e, e));
             }
         }
     }

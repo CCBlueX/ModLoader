@@ -20,7 +20,7 @@ final class Mod implements LoadedMod {
     final List<Mod> bundled = new ArrayList<>();
     private final ModLoader loader;
     private List<RuntimeMod> entrypoints = List.of();
-    private boolean startedByFramework;
+    private boolean isStartedByFramework;
     private boolean isUnloaded;
 
     Mod(ModLoader loader, ModFile file, ModClassLoader classLoader) {
@@ -37,10 +37,10 @@ final class Mod implements LoadedMod {
     /** @return what the framework's entrypoints had to leave out, for the person loading the mod */
     List<String> start() throws ReflectiveOperationException {
         List<String> leftOut = new ArrayList<>();
-        boolean present = file.framework.isPresent();
-        if (present) {
+        boolean hasFramework = file.framework.isPresent();
+        if (hasFramework) {
             // First, as a framework may still turn the mod into a module, which no loaded class allows.
-            startedByFramework = file.hasEntrypoints();
+            isStartedByFramework = file.hasEntrypoints();
             try {
                 file.start(classLoader);
             } catch (RuntimeException e) {
@@ -49,16 +49,16 @@ final class Mod implements LoadedMod {
                 }
                 // A framework brought in later never had its start, which its entrypoints may need.
                 e.printStackTrace();
-                leftOut.add(e.getMessage());
+                leftOut.add(ModLoader.describe(e));
                 for (Throwable other : e.getSuppressed()) {
-                    leftOut.add(other.getMessage());
+                    leftOut.add(ModLoader.describe(other));
                 }
             }
         }
         List<ServiceLoader.Provider<RuntimeMod>> providers = ServiceLoader.load(RuntimeMod.class, classLoader).stream()
                 .filter(provider -> provider.type().getClassLoader() == classLoader)
                 .toList();
-        if (!present && file.hasEntrypoints() && providers.isEmpty() && file.mixinConfigs().isEmpty()) {
+        if (!hasFramework && file.hasEntrypoints() && providers.isEmpty() && file.mixinConfigs().isEmpty()) {
             throw new IllegalStateException("built for " + file.framework.name()
                     + ", which this game does not have, and has no RuntimeMod entrypoint or mixins");
         }
@@ -69,7 +69,7 @@ final class Mod implements LoadedMod {
 
     /** What a framework entrypoint registered with the game stays there, so only a RuntimeMod can undo it. */
     boolean canUnload() {
-        return (!startedByFramework || !entrypoints.isEmpty()) && bundled.stream().allMatch(Mod::canUnload);
+        return (!isStartedByFramework || !entrypoints.isEmpty()) && bundled.stream().allMatch(Mod::canUnload);
     }
 
     /** This mod and every mod bundled with it, at any depth. */

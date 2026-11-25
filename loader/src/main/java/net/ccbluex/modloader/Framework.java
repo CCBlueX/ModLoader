@@ -5,6 +5,7 @@ import java.lang.instrument.Instrumentation;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.function.UnaryOperator;
+import org.jspecify.annotations.Nullable;
 
 /**
  * A mod framework: the format of its mod jars and, when the running game has it, its list of loaded mods.
@@ -32,13 +33,13 @@ public interface Framework {
     boolean isLoaded(String id);
 
     /** Null when the jar has no metadata of this framework. */
-    ModFile read(Path jar) throws IOException;
+    @Nullable ModFile read(Path jar) throws IOException;
 
     /**
      * The class as the framework hands it to the game's Mixin, before the mixins of its mods; null when it runs no
      * Mixin over the class. Only called when {@link #isPresent} holds.
      */
-    default byte[] preMixinClass(String name) {
+    default byte @Nullable [] preMixinClass(String name) {
         return null;
     }
 
@@ -56,7 +57,7 @@ public interface Framework {
      * Only called when {@link #hasStartedGame} does not hold; a framework brought in earlier stays and only adds
      * what these mods need on top.
      */
-    default List<Path> bringIn(List<ModFile> mods, Instrumentation instrumentation) throws IOException {
+    default @Nullable List<Path> bringIn(List<ModFile> mods, Instrumentation instrumentation) throws IOException {
         return null;
     }
 
@@ -73,7 +74,7 @@ public interface Framework {
      * the place of; else the call {@code replaced} in its method {@code in}, which the call {@code by} took the place
      * of. Classes by internal name, calls as Mixin's INVOKE targets.
      */
-    record Replacement(String owner, String in, String replaced, String by) {
+    record Replacement(String owner, @Nullable String in, String replaced, String by) {
     }
 
     /** Whether the game or the framework it runs has this class. */
@@ -81,7 +82,7 @@ public interface Framework {
         try {
             Class.forName(name, false, Framework.class.getClassLoader());
             return true;
-        } catch (ClassNotFoundException | RuntimeException e) {
+        } catch (ClassNotFoundException | RuntimeException _) {
             // Forge throws a RuntimeException for client classes on a dedicated server.
             return false;
         }

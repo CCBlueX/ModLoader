@@ -2,6 +2,7 @@ package net.ccbluex.modloader.mixin;
 
 import java.util.List;
 import java.util.Map;
+import org.jspecify.annotations.Nullable;
 
 /**
  * What a mixed class becomes in a running game, where a loaded class keeps its fields, methods and
@@ -27,7 +28,7 @@ public record Redefinition(
         byte[] companion,
         List<String> interfaces,
         Map<String, String> methods,
-        String initializer,
+        @Nullable String initializer,
         Map<String, String> fields,
         List<String> skipped,
         boolean isRelaxed) {

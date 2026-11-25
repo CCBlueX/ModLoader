@@ -1,6 +1,7 @@
 package net.ccbluex.modloader.mixin;
 
 import java.util.function.Function;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Defines the companions of one compilation and the classes Mixin makes up for them. Their code calls into
@@ -11,14 +12,15 @@ import java.util.function.Function;
 final class GeneratedClassLoader extends ClassLoader {
 
     private final MixinCompiler compiler;
-    private final Function<String, Class<?>> modClasses;
+    private final Function<String, @Nullable Class<?>> modClasses;
     private final ClassLoader support;
 
     /**
      * @param modClasses a class of a loaded mod by name, null when no mod has it
      * @param support Mixin's own classes, for a game without Mixin
      */
-    GeneratedClassLoader(MixinCompiler compiler, Function<String, Class<?>> modClasses, ClassLoader support) {
+    GeneratedClassLoader(MixinCompiler compiler, Function<String, @Nullable Class<?>> modClasses,
+            ClassLoader support) {
         super("modloader-generated", MixinManager.class.getClassLoader());
         this.compiler = compiler;
         this.modClasses = modClasses;

@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.BiFunction;
 import net.ccbluex.modloader.ModClassLoader;
 import net.minecraftforge.eventbus.api.bus.EventBus;
@@ -28,6 +29,7 @@ import net.minecraftforge.fml.loading.moddiscovery.ModFileParser;
 import net.minecraftforge.fml.loading.moddiscovery.ModsFolderLocator;
 import net.minecraftforge.forgespi.language.IModInfo;
 import net.minecraftforge.forgespi.language.ModFileScanData;
+import org.jspecify.annotations.Nullable;
 
 /**
  * FML's own container for a mod loaded at runtime. FML finds mod classes by module, so the mod becomes a
@@ -54,11 +56,12 @@ final class RuntimeModContainer extends FMLModContainer {
                 .map(annotation -> annotation.clazz().getClassName())
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException("no @Mod(\"" + id + "\") class"));
-        RuntimeModContainer container =
-                new RuntimeModContainer(info, modClass, scan, loader.defineModule(jar.name(), FMLLoader.getGameLayer()));
+        ModuleLayer layer = loader.defineModule(jar.name(), FMLLoader.getGameLayer());
+        RuntimeModContainer container = new RuntimeModContainer(info, modClass, scan, layer);
 
         index(id, container);
-        container.activityMap.get(ModLoadingStage.CONSTRUCT).run();
+        // FMLModContainer's constructor puts the CONSTRUCT activity there.
+        Objects.requireNonNull(container.activityMap.get(ModLoadingStage.CONSTRUCT)).run();
         List<BiFunction<ModContainer, ModLoadingStage, IModBusEvent>> lifecycle = List.of(
                 FMLConstructModEvent::new,
                 FMLCommonSetupEvent::new,
@@ -87,7 +90,7 @@ final class RuntimeModContainer extends FMLModContainer {
 
     /** ModList holds its containers in private, unmodifiable collections, so they are swapped for new ones. */
     @SuppressWarnings("unchecked")
-    private static void index(String id, ModContainer container) throws ReflectiveOperationException {
+    private static void index(String id, @Nullable ModContainer container) throws ReflectiveOperationException {
         Field byId = ModList.class.getDeclaredField("indexedMods");
         Field all = ModList.class.getDeclaredField("mods");
         byId.setAccessible(true);

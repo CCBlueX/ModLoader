@@ -2,11 +2,12 @@ package net.ccbluex.modloader;
 
 import com.google.gson.Gson;
 import java.io.IOException;
-import java.io.InputStream;
 import java.lang.instrument.Instrumentation;
 import java.lang.instrument.UnmodifiableClassException;
 import java.lang.invoke.MethodHandles;
 import java.net.URL;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -17,6 +18,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.ServiceLoader;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -26,8 +28,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.function.UnaryOperator;
-import java.util.jar.JarFile;
 import net.ccbluex.modloader.mixin.MixinManager;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The loader inside the game. The agent hands it one command per attach and returns its answer to the caller, both
@@ -40,8 +42,12 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
 
     private static final Gson GSON = new Gson();
 
-    /** @agent claude-fable-5-2 */
-    private record Request(String command, String item) {
+    /**
+     * {@code item} is the jar of a load and the mod id of an unload.
+     *
+     * @agent claude-fable-5-2
+     */
+    private record Request(String command, @Nullable String item) {
     }
 
     /**
@@ -94,8 +100,8 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
         Object answer;
         try {
             answer = switch (request.command()) {
-                case "load" -> load(Path.of(request.item()));
-                case "unload" -> unload(request.item());
+                case "load" -> load(Path.of(Objects.requireNonNull(request.item(), "load needs a jar")));
+                case "unload" -> unload(Objects.requireNonNull(request.item(), "unload needs a mod id"));
                 case "list" -> new LoadedMods(mods.values().stream()
                         .map(mod -> new LoadedMods.Entry(mod.id(), mod.file.framework.name(), mod.file.path.toString()))
                         .toList());
@@ -104,7 +110,7 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
         } catch (Exception | LinkageError e) {
             // The caller gets the message; the game log gets the trace a mod author needs.
             e.printStackTrace();
-            answer = new Refusal(e.getMessage() == null ? e.toString() : e.getMessage());
+            answer = new Refusal(describe(e));
         }
         return GSON.toJson(answer);
     }
@@ -117,7 +123,7 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
                 try {
                     unload(mod.id());
                 } catch (RuntimeException e) {
-                    System.err.println("[ModLoader] " + mod.id() + " stays loaded: " + e.getMessage());
+                    System.err.println("[ModLoader] " + mod.id() + " stays loaded: " + describe(e));
                 }
             }
         }
@@ -139,13 +145,7 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
             if (!file.framework.hasStartedGame()) {
                 bringIn(file.framework, loaded, notes);
             }
-            for (Mod mod : loaded) {
-                for (String dependency : mod.file.dependencies()) {
-                    if (!isLoaded(dependency) && loaded.stream().noneMatch(other -> other.id().equals(dependency))) {
-                        throw new IllegalStateException(mod.id() + " needs " + dependency + ", which is not loaded");
-                    }
-                }
-            }
+            checkDependencies(loaded);
             loaded.forEach(mod -> mods.put(mod.id(), mod));
             for (Mod mod : loaded) {
                 if (mod.file.framework.isPresent()) {
@@ -153,36 +153,54 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
                 }
             }
             MixinManager.Compilation compilation = compileMixins(mods.values());
-            runOnGameThread(() -> {
-                // As at the game's start, nothing of the mods runs before they have started.
-                applyMixins(compilation).forEach(skipped -> notes.add("left out: " + skipped));
-                Thread thread = Thread.currentThread();
-                ClassLoader context = thread.getContextClassLoader();
-                try {
-                    for (Mod mod : loaded) {
-                        // Libraries look their services up through the thread's class loader, which is the game's.
-                        thread.setContextClassLoader(mod.classLoader);
-                        mod.start().forEach(skipped -> notes.add("left out: " + skipped));
-                    }
-                } catch (ReflectiveOperationException e) {
-                    throw new CompletionException(e);
-                } finally {
-                    thread.setContextClassLoader(context);
-                }
-            });
+            runOnGameThread(() -> start(loaded, compilation, notes));
         } catch (Exception | LinkageError e) {
-            if (loaded.stream().anyMatch(mod -> mods.get(mod.id()) == mod)) {
-                // The game may still run code of the mods until their mixins are gone, so their classes stay found.
-                MixinManager.Compilation reverted = compileMixins(mods.values().stream().filter(mod -> !loaded.contains(mod)).toList());
-                runOnGameThread(() -> {
-                    applyMixins(reverted);
-                    loaded.forEach(mod -> mods.remove(mod.id(), mod));
-                });
-            }
-            loaded.forEach(Mod::close);
+            revert(loaded);
             throw e;
         }
         return new Loaded(file.id, file.framework.name(), true, notes);
+    }
+
+    private void checkDependencies(List<Mod> loaded) {
+        for (Mod mod : loaded) {
+            for (String dependency : mod.file.dependencies()) {
+                if (!isLoaded(dependency) && loaded.stream().noneMatch(other -> other.id().equals(dependency))) {
+                    throw new IllegalStateException(mod.id() + " needs " + dependency + ", which is not loaded");
+                }
+            }
+        }
+    }
+
+    /** On the game thread. As at the game's start, nothing of the mods runs before they have started. */
+    private void start(List<Mod> loaded, MixinManager.Compilation compilation, List<String> notes) {
+        applyMixins(compilation).forEach(skipped -> notes.add("left out: " + skipped));
+        Thread thread = Thread.currentThread();
+        ClassLoader context = thread.getContextClassLoader();
+        try {
+            for (Mod mod : loaded) {
+                // Libraries look their services up through the thread's class loader, which is the game's.
+                thread.setContextClassLoader(mod.classLoader);
+                mod.start().forEach(skipped -> notes.add("left out: " + skipped));
+            }
+        } catch (ReflectiveOperationException e) {
+            throw new CompletionException(e);
+        } finally {
+            thread.setContextClassLoader(context);
+        }
+    }
+
+    /** Takes the mods of a failed load out of the game again. */
+    private void revert(List<Mod> loaded) {
+        if (loaded.stream().anyMatch(mod -> mods.get(mod.id()) == mod)) {
+            // The game may still run code of the mods until their mixins are gone, so their classes stay found.
+            MixinManager.Compilation reverted =
+                    compileMixins(mods.values().stream().filter(mod -> !loaded.contains(mod)).toList());
+            runOnGameThread(() -> {
+                applyMixins(reverted);
+                loaded.forEach(mod -> mods.remove(mod.id(), mod));
+            });
+        }
+        loaded.forEach(Mod::close);
     }
 
     /**
@@ -197,7 +215,8 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
             ModFile nestedFile = read(nested);
             if (nestedFile == null) {
                 mod.classLoader.add(nested.toUri().toURL());
-            } else if (!isLoaded(nestedFile.id) && loaded.stream().noneMatch(other -> other.id().equals(nestedFile.id))) {
+            } else if (!isLoaded(nestedFile.id)
+                    && loaded.stream().noneMatch(other -> other.id().equals(nestedFile.id))) {
                 mod.bundled.add(open(nestedFile, loaded));
             }
         }
@@ -251,9 +270,11 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
                     + " entrypoints registered cannot be undone; restart the game");
         }
         for (Mod each : mod.withBundled()) {
-            for (String library : nativeLibraries(each.classLoader)) {
+            List<String> libraries = nativeLibraries(each.classLoader);
+            if (!libraries.isEmpty()) {
                 // The JVM binds a native library to its class loader until the game exits, and loads it into no other.
-                throw new IllegalStateException(each.id() + " loaded native code (" + Path.of(library).getFileName()
+                throw new IllegalStateException(each.id() + " loaded native code ("
+                        + Path.of(libraries.getFirst()).getFileName()
                         + "), which stays until the game exits; restart the game to load it again");
             }
         }
@@ -261,7 +282,7 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
 
     /** The paths of the native libraries loaded through this class loader. */
     @SuppressWarnings("unchecked")
-    private static Collection<String> nativeLibraries(ClassLoader loader) {
+    private static List<String> nativeLibraries(ClassLoader loader) {
         try {
             // Reflection hides every field of ClassLoader; a lookup does not.
             Class<?> type = Class.forName("jdk.internal.loader.NativeLibraries");
@@ -284,11 +305,11 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
         return applyMixins(compileMixins(mods.values()));
     }
 
-    private MixinManager.Compilation compileMixins(Collection<Mod> mods) {
+    private MixinManager.Compilation compileMixins(Collection<Mod> wanted) {
         Map<String, List<String>> configs = new HashMap<>();
         Set<String> relaxed = new HashSet<>();
         List<URL> jars = new ArrayList<>();
-        for (Mod mod : mods) {
+        for (Mod mod : wanted) {
             if (!mod.file.mixinConfigs().isEmpty()) {
                 configs.put(mod.id(), mod.file.mixinConfigs());
             }
@@ -310,7 +331,7 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
         }
     }
 
-    private Class<?> findModClass(String name) {
+    private @Nullable Class<?> findModClass(String name) {
         for (Mod mod : mods.values()) {
             Class<?> found = mod.classLoader.findOwnClass(name);
             if (found != null) {
@@ -320,7 +341,7 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
         return null;
     }
 
-    private byte[] preMixinClass(String name) {
+    private byte @Nullable [] preMixinClass(String name) {
         for (Framework framework : frameworks) {
             byte[] bytes = framework.isPresent() ? framework.preMixinClass(name) : null;
             if (bytes != null) {
@@ -331,7 +352,7 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
     }
 
     /** The jar as the framework the game runs describes it, else as any framework does. */
-    private ModFile read(Path jar) throws IOException {
+    private @Nullable ModFile read(Path jar) throws IOException {
         ModFile foreign = null;
         for (Framework framework : frameworks) {
             ModFile file = framework.read(jar);
@@ -353,10 +374,16 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
     private static Path extract(Path jar, String entry) throws IOException {
         Path file = Files.createTempFile("modloader-", ".jar");
         file.toFile().deleteOnExit();
-        try (JarFile source = new JarFile(jar.toFile()); InputStream in = source.getInputStream(source.getJarEntry(entry))) {
-            Files.copy(in, file, StandardCopyOption.REPLACE_EXISTING);
+        try (FileSystem files = FileSystems.newFileSystem(jar)) {
+            Files.copy(files.getPath(entry), file, StandardCopyOption.REPLACE_EXISTING);
         }
         return file;
+    }
+
+    /** The message, or the exception's name when it has none. */
+    static String describe(Throwable e) {
+        String message = e.getMessage();
+        return message == null ? e.toString() : message;
     }
 
     /**
@@ -368,14 +395,15 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
         Object server = null;
         if (Framework.hasClass("net.minecraft.client.Minecraft")) {
             try {
-                minecraft = Class.forName("net.minecraft.client.Minecraft", false, ModLoader.class.getClassLoader())
-                        .getMethod("getInstance").invoke(null);
-                server = minecraft == null ? null : minecraft.getClass().getMethod("getSingleplayerServer").invoke(minecraft);
+                ClassLoader game = ModLoader.class.getClassLoader();
+                Class<?> type = Class.forName("net.minecraft.client.Minecraft", false, game);
+                minecraft = type.getMethod("getInstance").invoke(null);
+                server = minecraft == null ? null : type.getMethod("getSingleplayerServer").invoke(minecraft);
             } catch (ReflectiveOperationException e) {
                 throw new IllegalStateException(e);
             }
         }
-        if (minecraft == null) {
+        if (!(minecraft instanceof Executor client)) {
             task.run();
             return;
         }
@@ -387,14 +415,14 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
                     parked.countDown();
                     try {
                         done.await();
-                    } catch (InterruptedException e) {
+                    } catch (InterruptedException _) {
                         Thread.currentThread().interrupt();
                     }
                 });
                 // A server that takes no more tasks has stopped ticking as well.
                 parked.await(10, TimeUnit.SECONDS);
             }
-            CompletableFuture.runAsync(task, (Executor) minecraft).join();
+            CompletableFuture.runAsync(task, client).join();
         } catch (CompletionException e) {
             throw e.getCause() instanceof RuntimeException cause ? cause : e;
         } catch (InterruptedException e) {

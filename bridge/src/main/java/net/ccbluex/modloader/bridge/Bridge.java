@@ -14,13 +14,15 @@ import java.lang.invoke.MethodType;
  */
 public final class Bridge {
 
-    /** {@code (Lookup, String, MethodType, Object[]) -> CallSite}, set by the loader. */
+    /** {@code (Lookup, String, MethodType, Object[]) -> CallSite}, set by the loader before a call links. */
+    @SuppressWarnings("NullAway.Init")
     public static volatile MethodHandle linker;
 
     private Bridge() {
     }
 
-    public static CallSite link(MethodHandles.Lookup caller, String name, MethodType type, Object... arguments) throws Throwable {
+    public static CallSite link(MethodHandles.Lookup caller, String name, MethodType type, Object... arguments)
+            throws Throwable {
         return (CallSite) linker.invoke(caller, name, type, arguments);
     }
 }

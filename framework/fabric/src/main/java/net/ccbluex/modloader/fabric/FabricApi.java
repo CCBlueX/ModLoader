@@ -20,6 +20,7 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -46,25 +47,14 @@ final class FabricApi {
     /** Reads the modules of the jar, unpacked once into {@code directory}. */
     FabricApi(Path jar, Path directory) throws IOException {
         if (!Files.isDirectory(directory)) {
-            Files.createDirectories(directory.getParent());
-            // Filled apart and moved in whole: the directory stands for a complete unpack.
-            Path part = Files.createTempDirectory(directory.getParent(), directory.getFileName().toString());
-            try (JarFile file = new JarFile(jar.toFile())) {
-                for (JarEntry entry : (Iterable<JarEntry>) file.stream()::iterator) {
-                    if (entry.getName().startsWith("META-INF/jars/") && entry.getName().endsWith(".jar")) {
-                        try (InputStream in = file.getInputStream(entry)) {
-                            Files.copy(in, part.resolve(Path.of(entry.getName()).getFileName().toString()));
-                        }
-                    }
-                }
-            }
-            Files.move(part, directory, StandardCopyOption.ATOMIC_MOVE);
+            unpack(jar, directory);
         }
-        try (var jars = Files.list(directory)) {
+        try (Stream<Path> jars = Files.list(directory)) {
             for (Path module : jars.toList()) {
                 try (JarFile file = new JarFile(module.toFile())) {
                     JsonObject metadata;
-                    try (InputStreamReader reader = new InputStreamReader(file.getInputStream(file.getEntry("fabric.mod.json")), StandardCharsets.UTF_8)) {
+                    try (InputStreamReader reader = new InputStreamReader(
+                            file.getInputStream(file.getEntry("fabric.mod.json")), StandardCharsets.UTF_8)) {
                         metadata = JsonParser.parseReader(reader).getAsJsonObject();
                     }
                     String id = metadata.get("id").getAsString();
@@ -77,6 +67,22 @@ final class FabricApi {
                 }
             }
         }
+    }
+
+    private static void unpack(Path jar, Path directory) throws IOException {
+        Files.createDirectories(directory.getParent());
+        // Filled apart and moved in whole: the directory stands for a complete unpack.
+        Path part = Files.createTempDirectory(directory.getParent(), directory.getFileName().toString());
+        try (JarFile file = new JarFile(jar.toFile())) {
+            for (JarEntry entry : (Iterable<JarEntry>) file.stream()::iterator) {
+                if (entry.getName().startsWith("META-INF/jars/") && entry.getName().endsWith(".jar")) {
+                    try (InputStream in = file.getInputStream(entry)) {
+                        Files.copy(in, part.resolve(Path.of(entry.getName()).getFileName().toString()));
+                    }
+                }
+            }
+        }
+        Files.move(part, directory, StandardCopyOption.ATOMIC_MOVE);
     }
 
     /**
@@ -98,7 +104,9 @@ final class FabricApi {
 
     private void add(String id, Set<String> ordered) {
         if (!ordered.contains(id)) {
-            depends.get(id).stream().filter(modules::containsKey).forEach(dependency -> add(dependency, ordered));
+            depends.getOrDefault(id, Set.of()).stream()
+                    .filter(modules::containsKey)
+                    .forEach(dependency -> add(dependency, ordered));
             ordered.add(id);
         }
     }

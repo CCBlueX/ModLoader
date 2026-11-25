@@ -1,0 +1,13 @@
+{
+  "date": "2026-11-25",
+  "change": "refactor: jspecify and modern java",
+  "tool": "omp",
+  "models": [
+    {
+      "model": "claude-fable-5-2",
+      "provider": "anthropic",
+      "tokens": { "input": 282, "cachedInput": 32770427, "cacheWrite": 679886, "output": 214491 },
+      "usd": 26.01
+    }
+  ]
+}

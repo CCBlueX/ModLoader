@@ -7,11 +7,12 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import net.fabricmc.loader.api.LanguageAdapter;
 import net.fabricmc.loader.api.LanguageAdapterException;
 import net.fabricmc.loader.api.ModContainer;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Creates a mod's entrypoints from its own class loader the way Fabric's Java and Kotlin adapters do from Knot:
@@ -19,6 +20,7 @@ import net.fabricmc.loader.api.ModContainer;
  * class it was asked for, so after a reload it would create the entrypoints of the jar loaded first.
  *
  * @agent claude-opus-5-5
+ * @agent claude-fable-5-2
  */
 public final class ClassLoaderAdapter implements LanguageAdapter {
 
@@ -40,7 +42,8 @@ public final class ClassLoaderAdapter implements LanguageAdapter {
             Class<?> owner = Class.forName(parts[0], true, loader);
             if (parts.length == 1) {
                 if (!type.isAssignableFrom(owner)) {
-                    throw new LanguageAdapterException("Class " + owner.getName() + " cannot be cast to " + type.getName() + "!");
+                    throw new LanguageAdapterException(
+                            "Class " + owner.getName() + " cannot be cast to " + type.getName() + "!");
                 }
                 return type.cast(instance(owner));
             }
@@ -54,14 +57,9 @@ public final class ClassLoaderAdapter implements LanguageAdapter {
         }
     }
 
-    private <T> T member(Class<?> owner, Object receiver, String name, String value, Class<T> type)
+    private <T> T member(Class<?> owner, @Nullable Object receiver, String name, String value, Class<T> type)
             throws ReflectiveOperationException, LanguageAdapterException {
-        List<Method> methods = new ArrayList<>();
-        for (Method method : owner.getDeclaredMethods()) {
-            if (method.getName().equals(name)) {
-                methods.add(method);
-            }
-        }
+        List<Method> methods = methods(owner, name);
         Field field = declaredField(owner, name);
         if (field != null && (receiver != null || Modifier.isStatic(field.getModifiers()))) {
             if (!methods.isEmpty()) {
@@ -74,10 +72,12 @@ public final class ClassLoaderAdapter implements LanguageAdapter {
             return type.cast(field.get(Modifier.isStatic(field.getModifiers()) ? null : receiver));
         }
         if (!type.isInterface()) {
-            throw new LanguageAdapterException("Cannot proxy method " + value + " to non-interface type " + type.getName() + "!");
+            throw new LanguageAdapterException(
+                    "Cannot proxy method " + value + " to non-interface type " + type.getName() + "!");
         }
         if (methods.size() != 1) {
-            throw new LanguageAdapterException((methods.isEmpty() ? "Could not find " : "Found multiple method entries of name ") + value + "!");
+            throw new LanguageAdapterException(
+                    (methods.isEmpty() ? "Could not find " : "Found multiple method entries of name ") + value + "!");
         }
         Method method = methods.getFirst();
         method.setAccessible(true);
@@ -98,7 +98,7 @@ public final class ClassLoaderAdapter implements LanguageAdapter {
         return constructor.newInstance();
     }
 
-    private static Object staticField(Class<?> owner, String name) throws IllegalAccessException {
+    private static @Nullable Object staticField(Class<?> owner, String name) throws IllegalAccessException {
         Field field = declaredField(owner, name);
         if (field == null || !Modifier.isStatic(field.getModifiers())) {
             return null;
@@ -108,21 +108,17 @@ public final class ClassLoaderAdapter implements LanguageAdapter {
     }
 
     private static boolean hasMember(Class<?> owner, String name) {
-        if (declaredField(owner, name) != null) {
-            return true;
-        }
-        for (Method method : owner.getDeclaredMethods()) {
-            if (method.getName().equals(name)) {
-                return true;
-            }
-        }
-        return false;
+        return declaredField(owner, name) != null || !methods(owner, name).isEmpty();
     }
 
-    private static Field declaredField(Class<?> owner, String name) {
+    private static List<Method> methods(Class<?> owner, String name) {
+        return Arrays.stream(owner.getDeclaredMethods()).filter(method -> method.getName().equals(name)).toList();
+    }
+
+    private static @Nullable Field declaredField(Class<?> owner, String name) {
         try {
             return owner.getDeclaredField(name);
-        } catch (NoSuchFieldException e) {
+        } catch (NoSuchFieldException _) {
             return null;
         }
     }

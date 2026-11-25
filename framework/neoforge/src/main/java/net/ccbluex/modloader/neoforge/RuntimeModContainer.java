@@ -56,30 +56,34 @@ final class RuntimeModContainer extends ModContainer {
     }
 
     static void start(Path jar, String id, ClassLoader loader) throws ReflectiveOperationException, IOException {
-        ModFile file = (ModFile) JarModsDotTomlModFileReader.createModFile(JarContents.ofPath(jar), ModFileDiscoveryAttributes.DEFAULT);
+        ModFile file = (ModFile) JarModsDotTomlModFileReader.createModFile(
+                JarContents.ofPath(jar), ModFileDiscoveryAttributes.DEFAULT);
         ModFileScanData scan = new Scanner(file).scan();
         IModInfo info = file.getModInfos().stream().filter(mod -> mod.getModId().equals(id)).findFirst().orElseThrow();
         RuntimeModContainer container = new RuntimeModContainer(info);
         Dist dist = FMLLoader.getCurrent().getDist();
-        Map<Class<?>, Object> arguments = Map.of(IEventBus.class, container.eventBus, ModContainer.class, container, Dist.class, dist);
+        Map<Class<?>, Object> arguments =
+                Map.of(IEventBus.class, container.eventBus, ModContainer.class, container, Dist.class, dist);
 
         containers().put(id, container);
         ModLoadingContext.get().setActiveContainer(container);
         try {
             List<String> modClasses = scan.getAnnotatedBy(Mod.class, ElementType.TYPE)
-                    .filter(mod -> mod.annotationData().get("value").equals(id))
+                    .filter(mod -> id.equals(mod.annotationData().get("value")))
                     .filter(mod -> AutomaticEventSubscriber.getSides(mod.annotationData().get("dist")).contains(dist))
                     .map(mod -> mod.clazz().getClassName())
                     .toList();
             for (String modClass : modClasses) {
                 Constructor<?> constructor = Class.forName(modClass, true, loader).getConstructors()[0];
-                Object[] parameters = new Object[constructor.getParameterCount()];
-                for (int i = 0; i < parameters.length; i++) {
-                    parameters[i] = arguments.get(constructor.getParameterTypes()[i]);
-                    if (parameters[i] == null) {
-                        throw new IllegalStateException(modClass + " takes a " + constructor.getParameterTypes()[i].getSimpleName()
+                Class<?>[] types = constructor.getParameterTypes();
+                Object[] parameters = new Object[types.length];
+                for (int i = 0; i < types.length; i++) {
+                    Object argument = arguments.get(types[i]);
+                    if (argument == null) {
+                        throw new IllegalStateException(modClass + " takes a " + types[i].getSimpleName()
                                 + ", which a mod loaded at runtime cannot get");
                     }
+                    parameters[i] = argument;
                 }
                 constructor.newInstance(parameters);
             }

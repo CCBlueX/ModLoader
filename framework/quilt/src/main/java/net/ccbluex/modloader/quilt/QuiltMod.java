@@ -5,6 +5,7 @@ import java.util.List;
 import net.ccbluex.modloader.Framework;
 import net.ccbluex.modloader.ModClassLoader;
 import net.ccbluex.modloader.ModFile;
+import org.jspecify.annotations.Nullable;
 import org.quiltmc.loader.api.plugin.ModContainerExt;
 
 /**
@@ -17,7 +18,7 @@ final class QuiltMod extends ModFile {
 
     private final ModFile fabric;
     /** Null before {@link #register}. */
-    private ModContainerExt container;
+    private @Nullable ModContainerExt container;
 
     QuiltMod(Framework framework, ModFile fabric) {
         super(framework, fabric.path, fabric.id);

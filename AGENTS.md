@@ -51,6 +51,10 @@ quilt or forge, another session's game test included.
 - Formats and plumbing go through libraries, not own code: NightConfig for `mods.toml` (shipped in `lib/runtime`;
   the loader's class loader asks the game first, so NeoForge's and Forge's own copy wins there), the game's Gson and
   Guava (`compileOnly`), and in the crate serde, clap, tempfile, thiserror and sysinfo.
+- Nullness is JSpecify: every package has a `package-info.java` with `@NullMarked`, and NullAway, the one Error
+  Prone check that runs, fails the build of main code on a violation. A new package without that file is skipped
+  without a word. `jspecify` is `compileOnly`: the game ships it, and the JVM ignores an annotation whose class is
+  missing, which keeps `Agent` and `Bridge` loadable anywhere.
 - The crate speaks attach protocol 2 only, which Java 24 brought: the request has no size limit, and on Windows it
   travels over the pipe, so the thread started in the JVM calls `JVM_EnqueueOperation_v2` directly, at jvm.dll's
   address there plus the function's offset in a mapping of the same file here. Protocol 1 would need machine code

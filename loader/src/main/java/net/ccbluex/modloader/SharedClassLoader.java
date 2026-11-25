@@ -7,6 +7,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Stands in for the parent of the framework's class loader: what the parent has, then the classes and resources of
@@ -49,7 +50,7 @@ public final class SharedClassLoader extends ClassLoader {
     }
 
     @Override
-    protected URL findResource(String name) {
+    protected @Nullable URL findResource(String name) {
         if (MOD_LOOKUP.isBound()) {
             return null;
         }
