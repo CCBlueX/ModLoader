@@ -1,5 +1,6 @@
 package net.ccbluex.modloader;
 
+import com.google.gson.Gson;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.instrument.Instrumentation;
@@ -29,12 +30,43 @@ import java.util.jar.JarFile;
 import net.ccbluex.modloader.mixin.MixinManager;
 
 /**
- * The loader inside the game. The agent hands it one command per attach and returns its answer to the CLI.
+ * The loader inside the game. The agent hands it one command per attach and returns its answer to the caller, both
+ * as JSON; the Rust crate has the other side.
  *
  * @agent claude-fable-5-2
  * @agent claude-opus-5-5
  */
-public final class ModLoader implements UnaryOperator<String> {
+public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
+
+    private static final Gson GSON = new Gson();
+
+    /** @agent claude-fable-5-2 */
+    private record Request(String command, String item) {
+    }
+
+    /**
+     * The answer to {@code load}. Not new when the game or an earlier load already had the mod.
+     *
+     * @agent claude-fable-5-2
+     */
+    private record Loaded(String id, String framework, boolean isNew, List<String> notes) {
+    }
+
+    /** @agent claude-fable-5-2 */
+    private record Unloaded(List<String> notes) {
+    }
+
+    /** @agent claude-fable-5-2 */
+    private record LoadedMods(List<Entry> mods) {
+
+        /** @agent claude-fable-5-2 */
+        private record Entry(String id, String framework, String path) {
+        }
+    }
+
+    /** @agent claude-fable-5-2 */
+    private record Refusal(String error) {
+    }
 
     private final List<Framework> frameworks = ServiceLoader.load(Framework.class, ModLoader.class.getClassLoader())
             .stream().map(ServiceLoader.Provider::get).sorted(Comparator.comparing(Framework::name)).toList();
@@ -56,57 +88,56 @@ public final class ModLoader implements UnaryOperator<String> {
         }
     }
 
-    /** First line is the command, every further line one jar or mod id. */
     @Override
-    public String apply(String request) {
-        List<String> lines = List.of(request.split("\n"));
-        List<String> items = lines.subList(1, lines.size());
-        return switch (lines.getFirst()) {
-            case "load" -> each(items, jar -> load(Path.of(jar)));
-            case "unload" -> each(items, this::unload);
-            case "list" -> mods.isEmpty() ? "no mods loaded" : String.join("\n", mods.values().stream().map(Mod::toString).toList());
-            // Sent by the agent before a newer modloader.jar takes over. Bundled mods go with the mod they came in.
-            case "stop" -> each(mods.values().stream()
-                    .filter(mod -> mods.values().stream().noneMatch(other -> other.bundled.contains(mod)))
-                    .map(Mod::id)
-                    .toList(), this::unload);
-            default -> "error: unknown command " + lines.getFirst();
-        };
+    public String apply(String json) {
+        Request request = GSON.fromJson(json, Request.class);
+        Object answer;
+        try {
+            answer = switch (request.command()) {
+                case "load" -> load(Path.of(request.item()));
+                case "unload" -> unload(request.item());
+                case "list" -> new LoadedMods(mods.values().stream()
+                        .map(mod -> new LoadedMods.Entry(mod.id(), mod.file.framework.name(), mod.file.path.toString()))
+                        .toList());
+                default -> throw new IllegalArgumentException("unknown command " + request.command());
+            };
+        } catch (Exception | LinkageError e) {
+            // The caller gets the message; the game log gets the trace a mod author needs.
+            e.printStackTrace();
+            answer = new Refusal(e.getMessage() == null ? e.toString() : e.getMessage());
+        }
+        return GSON.toJson(answer);
     }
 
-    private interface Command {
-        String run(String item) throws Exception;
-    }
-
-    private static String each(List<String> items, Command command) {
-        List<String> answers = new ArrayList<>();
-        for (String item : items) {
-            try {
-                answers.add(command.run(item));
-            } catch (Exception | LinkageError e) {
-                // The CLI gets one line; the game log gets the trace a mod author needs.
-                e.printStackTrace();
-                answers.add("error: " + item + ": " + (e.getMessage() == null ? e : e.getMessage()));
+    /** Called by the agent before a newer modloader.jar takes over. Bundled mods go with the mod they came in. */
+    @Override
+    public void close() {
+        for (Mod mod : List.copyOf(mods.values())) {
+            if (mods.values().stream().noneMatch(other -> other.bundled.contains(mod))) {
+                try {
+                    unload(mod.id());
+                } catch (RuntimeException e) {
+                    System.err.println("[ModLoader] " + mod.id() + " stays loaded: " + e.getMessage());
+                }
             }
         }
-        return String.join("\n", answers);
     }
 
-    private String load(Path jar) throws Exception {
+    private Loaded load(Path jar) throws Exception {
         ModFile file = read(jar);
         if (file == null) {
             throw new IllegalArgumentException("not a mod of " + frameworks.stream().map(Framework::name).toList());
         }
         if (isLoaded(file.id)) {
-            return file.id + " is already loaded";
+            return new Loaded(file.id, file.framework.name(), false, List.of());
         }
         // A jar and the mods bundled in it load together, as at startup: they may depend on each other.
         List<Mod> loaded = new ArrayList<>();
-        StringBuilder answer = new StringBuilder("loaded " + file.id + " (" + file.framework.name() + ")");
+        List<String> notes = new ArrayList<>();
         try {
             open(file, loaded);
             if (!file.framework.hasStartedGame()) {
-                bringIn(file.framework, loaded, answer);
+                bringIn(file.framework, loaded, notes);
             }
             for (Mod mod : loaded) {
                 for (String dependency : mod.file.dependencies()) {
@@ -124,14 +155,14 @@ public final class ModLoader implements UnaryOperator<String> {
             MixinManager.Compilation compilation = compileMixins(mods.values());
             runOnGameThread(() -> {
                 // As at the game's start, nothing of the mods runs before they have started.
-                applyMixins(compilation).forEach(skipped -> answer.append("\n  left out: ").append(skipped));
+                applyMixins(compilation).forEach(skipped -> notes.add("left out: " + skipped));
                 Thread thread = Thread.currentThread();
                 ClassLoader context = thread.getContextClassLoader();
                 try {
                     for (Mod mod : loaded) {
                         // Libraries look their services up through the thread's class loader, which is the game's.
                         thread.setContextClassLoader(mod.classLoader);
-                        mod.start().forEach(skipped -> answer.append("\n  left out: ").append(skipped));
+                        mod.start().forEach(skipped -> notes.add("left out: " + skipped));
                     }
                 } catch (ReflectiveOperationException e) {
                     throw new CompletionException(e);
@@ -151,7 +182,7 @@ public final class ModLoader implements UnaryOperator<String> {
             loaded.forEach(Mod::close);
             throw e;
         }
-        return answer.toString();
+        return new Loaded(file.id, file.framework.name(), true, notes);
     }
 
     /**
@@ -174,7 +205,7 @@ public final class ModLoader implements UnaryOperator<String> {
     }
 
     /** Puts the mods that come with the framework at the front of {@code loaded}, when it comes in for them. */
-    private void bringIn(Framework framework, List<Mod> loaded, StringBuilder answer) throws IOException {
+    private void bringIn(Framework framework, List<Mod> loaded, List<String> notes) throws IOException {
         boolean wasPresent = framework.isPresent();
         List<Path> jars = framework.bringIn(loaded.stream().map(mod -> mod.file).toList(), instrumentation);
         if (jars == null) {
@@ -190,11 +221,11 @@ public final class ModLoader implements UnaryOperator<String> {
         }
         loaded.addAll(0, first);
         if (!wasPresent || !ids.isEmpty()) {
-            answer.append("\n  brought in ").append(framework.name()).append(ids.isEmpty() ? "" : " with " + String.join(", ", ids));
+            notes.add("brought in " + framework.name() + (ids.isEmpty() ? "" : " with " + String.join(", ", ids)));
         }
     }
 
-    private String unload(String id) {
+    private Unloaded unload(String id) {
         Mod mod = mods.get(id);
         if (mod == null) {
             throw new IllegalArgumentException("not loaded by ModLoader");
@@ -202,8 +233,8 @@ public final class ModLoader implements UnaryOperator<String> {
         checkUnload(mod);
         runOnGameThread(mod::unload);
         Framework framework = mod.file.framework;
-        return "unloaded " + id + (framework.isPresent() && !framework.hasStartedGame()
-                ? "\n  " + framework.name() + " and the mods that came with it stay until the game exits" : "");
+        return new Unloaded(framework.isPresent() && !framework.hasStartedGame()
+                ? List.of(framework.name() + " and the mods that came with it stay until the game exits") : List.of());
     }
 
     /** Takes the mod and the mods bundled in it out of the list. */

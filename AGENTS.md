@@ -4,7 +4,8 @@ Minecraft 26.3+ (Mojang names, unobfuscated), Java 25. Root package `net.ccbluex
 
 | Module | Runs in | Holds |
 |---|---|---|
-| `cli/` | the CLI's JVM; `agent.Agent` in the game's system class loader | commands and attach; builds `modloader.jar` with the modules below under `lib/` |
+| `rust/` | a launcher's process, or its own as the command line tool (crate `modloader`; the program needs feature `cli`) | `ModLoader` (the typed requests), finding games (`Jvm`), HotSpot's attach protocol (`attach.rs`, `attach/unix.rs`, `attach/windows.rs`); `main.rs` is the tool |
+| `agent/` | the game's system class loader | `Agent`, the entry of `modloader.jar`, built here with the modules below under `lib/`; the tests of the whole |
 | `bridge/` | the game's bootstrap class path | `Bridge.link`, the bootstrap method of every call the compiler writes into a class |
 | `loader/` | a class loader below the game's | `ModLoader` (the commands), `Mod`, `ModClassLoader`, the `Framework` and `ModFile` contract; in `mixin`: `MixinManager` (redefines and reverts), `Linker` (links the Bridge calls), the `MixinCompiler` contract |
 | `api/` | same | what mods compile against |
@@ -13,30 +14,42 @@ Minecraft 26.3+ (Mojang names, unobfuscated), Java 25. Root package `net.ccbluex
 | `example/` | a mod class loader | a mod with an entrypoint for every framework and a mixin; the tests load it |
 
 A new framework is a module under `framework/`, its name in `settings.gradle.kts` and its `runtime(...)` line in
-`cli/build.gradle.kts`.
+`agent/build.gradle.kts`.
 
 ## Commands
 
 ```sh
-flock /tmp/modloader-gradle.lock ./gradlew build   # compiles and runs the tests
+flock /tmp/modloader-gradle.lock ./gradlew build   # Java and, through cargo, rust/; runs the Java tests
+(cd rust && cargo test --all-features && cargo clippy --all-features --all-targets)
 ```
 
-`cli`'s tests run the built jar against a stand-in game: `cli/src/test/java/net/minecraft` is that game,
-`cli/src/mod` the mod with mixins they load, `cli/src/widened` what that mod compiles against in place of an
-access widener.
+`agent`'s tests run the built program with the jar beside it (`agent/build/dist`) against a stand-in game:
+`agent/src/test/java/net/minecraft` is that game, `agent/src/mod` the mod with mixins they load,
+`agent/src/widened` what that mod compiles against in place of an access widener. CI runs them on Linux, macOS and
+Windows, the only place the code of the other two systems runs. Here it only compiles:
+`cargo clippy --all-features --target x86_64-pc-windows-gnu` and `--target aarch64-apple-darwin`.
 
 Against real games: install 26.3 dedicated servers (vanilla `server.jar`, Fabric server launcher, NeoForge and Forge
 installers with `--installServer`), start each with `-Xmx` and `eula=true`, then
-`java -jar cli/build/libs/modloader.jar load example/build/libs/example-0.1.0.jar --pid <pid>` and read the server
+`agent/build/dist/modloader load example/build/libs/example-0.1.0-SNAPSHOT.jar --pid <pid>` and read the server
 console for the `[example]` lines; the mixin prints one every 100 ticks until `unload example`. Always pass `--pid`
-on a shared machine: without it the CLI takes any JVM whose command line names minecraft, fabric or forge, another
-session's game test included.
+on a shared machine: without it the program takes any Java process whose command line names minecraft, fabric,
+quilt or forge, another session's game test included.
 
 ## Invariants
 
-- The game loads `Agent` and `Bridge` once and keeps them; everything else under `lib/` is loaded again when the
-  CLI's jar changes (`Agent.loaderVersion`). A change to either needs a game restart. `Agent`'s request (answer
-  file, jar, command, one per line) and `Bridge`'s one method and one field have to stay as an older copy has them.
+- The game loads `Agent` and `Bridge` once and keeps them; everything else under `lib/` is loaded again when
+  `modloader.jar` changes (`Agent.loaderVersion`). A change to either needs a game restart. `Agent`'s request
+  (answer file, jar, the loader's request, one per line; written by `ModLoader::request` in `rust/src/lib.rs`) and
+  `Bridge`'s one method and one field have to stay as an older copy has them.
+- The loader's request and answers are JSON: the records at the top of the Java `ModLoader` and the serde types in
+  `rust/src/lib.rs` change together. `Agent` has no Gson; when the loader cannot start, it answers plain text, which
+  the crate reports as `Error::Refused`.
+- The crate speaks attach protocol 2 only, which Java 24 brought: the request has no size limit, and on Windows it
+  travels over the pipe, so the thread started in the JVM calls `JVM_EnqueueOperation_v2` directly, at jvm.dll's
+  address there plus the function's offset in a mapping of the same file here. Protocol 1 would need machine code
+  written into the JVM.
+- On Linux `check_handles_quit` reads the process's caught signals first: SIGQUIT ends a process that is no JVM.
 - Adapter classes load in every game, also one without their framework. Calls into the framework are fine in methods
   the loader only calls when it is present (`isLoaded`, `start`, `stop`). Code that passes one framework type as
   another (`FMLModContainer` as `ModContainer`) makes the verifier load both, so it lives in a class of its own
@@ -192,7 +205,8 @@ Mixins:
   commit: `agent-usage record <session log> --from <first call of this change> --change "<commit subject>"`, then
   `agent-usage check`. Never edit or delete an existing file.
 - Every class, interface, enum or record a model wrote carries `@agent <model>` as the last tag of its doc comment,
-  naming the model that writes it. No other doc: `/** @agent claude-opus-5-5 */` on its own.
+  naming the model that writes it. No other doc: `/** @agent claude-opus-5-5 */` on its own. In Rust it is the last
+  line of the `///` doc of every struct, enum, trait and top-level function, and of a test module for its tests.
 - A model that later changes a method's logic adds its own tag; several models get one tag each, oldest first.
   Renames, imports, formatting and moves add none. Tags move with the code.
 - Model ids as the provider names them, without provider prefix: `claude-opus-5-5`, `gpt-5.6-sol`.

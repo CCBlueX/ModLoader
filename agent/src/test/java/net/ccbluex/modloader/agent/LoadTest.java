@@ -1,4 +1,4 @@
-package net.ccbluex.modloader.cli;
+package net.ccbluex.modloader.agent;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
- * Runs the built modloader.jar against a JVM that looks like a game without a mod framework.
+ * Runs the built command line tool and modloader.jar against a JVM that looks like a game without a mod framework.
  *
  * @agent claude-fable-5-2
  * @agent claude-opus-5-5
@@ -194,7 +194,7 @@ class LoadTest {
     }
 
     private String cli(String... arguments) throws IOException, InterruptedException {
-        List<String> command = new ArrayList<>(List.of(JAVA, "-Xmx64m", "-jar", System.getProperty("modloader.jar")));
+        List<String> command = new ArrayList<>(List.of(System.getProperty("modloader.cli")));
         command.addAll(List.of(arguments));
         command.addAll(List.of("--pid", String.valueOf(game.pid())));
         Process cli = new ProcessBuilder(command).redirectErrorStream(true).start();

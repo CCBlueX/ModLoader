@@ -1,0 +1,13 @@
+{
+  "date": "2026-11-25",
+  "change": "feat: rust library and cli",
+  "tool": "omp",
+  "models": [
+    {
+      "model": "claude-fable-5-2",
+      "provider": "anthropic",
+      "tokens": { "input": 90, "cachedInput": 8557307, "cacheWrite": 174993, "output": 45276 },
+      "usd": 6.32
+    }
+  ]
+}

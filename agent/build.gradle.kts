@@ -35,7 +35,6 @@ tasks.jar {
     archiveVersion = ""
     manifest {
         attributes(
-            "Main-Class" to "net.ccbluex.modloader.cli.Main",
             "Agent-Class" to "net.ccbluex.modloader.agent.Agent",
             "Can-Redefine-Classes" to true,
             "Can-Retransform-Classes" to true,
@@ -52,12 +51,30 @@ val modJar = tasks.register<Jar>("modJar") {
     from(mod.output)
 }
 
+// The command line tool of the Rust crate in rust/, which looks for modloader.jar beside itself.
+val cli = tasks.register<Exec>("cli") {
+    workingDir = rootProject.file("rust")
+    commandLine("cargo", "build", "--release", "--locked", "--features", "cli")
+}
+
+val dist = tasks.register<Sync>("dist") {
+    dependsOn(cli)
+    from(tasks.jar)
+    from(rootProject.file("rust/target/release")) { include("modloader", "modloader.exe") }
+    into(layout.buildDirectory.dir("dist"))
+}
+
+tasks.assemble {
+    dependsOn(dist)
+}
+
 tasks.test {
     val example = project(":example").tasks.named<Jar>("jar")
     val api = project(":api").tasks.named<Jar>("jar")
-    // Inputs, not only dependencies: the paths stay the same when the code in the jars changes.
-    inputs.files(tasks.jar, example, api, modJar)
-    systemProperty("modloader.jar", tasks.jar.get().archiveFile.get().asFile.path)
+    // Inputs, not only dependencies: the paths stay the same when the code in the files changes.
+    inputs.files(dist, example, api, modJar)
+    // Windows adds the .exe itself.
+    systemProperty("modloader.cli", dist.get().destinationDir.resolve("modloader").path)
     systemProperty("example.jar", example.get().archiveFile.get().asFile.path)
     systemProperty("api.jar", api.get().archiveFile.get().asFile.path)
     systemProperty("mixed.jar", modJar.get().archiveFile.get().asFile.path)

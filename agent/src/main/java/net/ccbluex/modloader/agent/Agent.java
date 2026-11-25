@@ -29,26 +29,28 @@ public final class Agent {
     private Agent() {
     }
 
-    /** {@code request} is three parts split by line breaks: the file the answer goes to, the CLI's jar, the command. */
+    /**
+     * {@code request} is three parts split by line breaks: the file the answer goes to, this jar, the loader's
+     * request. The answer is the loader's JSON, or plain text when the loader could not start.
+     */
     public static synchronized void agentmain(String request, Instrumentation instrumentation) throws IOException {
         String[] parts = request.split("\n", 3);
         String answer;
         try {
-            // This class stays the one from the first attach; the loader follows the jar the CLI runs from.
+            // This class stays the one from the first attach; the loader follows the jar of the latest request.
             Path jar = Path.of(parts[1]);
             FileTime version = Files.getLastModifiedTime(jar);
-            String stopped = "";
             if (!version.equals(loaderVersion)) {
-                if (loader != null) {
-                    stopped = loader.apply("stop");
+                if (loader instanceof AutoCloseable old) {
+                    old.close();
                 }
                 loader = start(jar, instrumentation);
                 loaderVersion = version;
             }
-            answer = (stopped.isEmpty() ? "" : stopped + "\n") + loader.apply(parts[2]);
+            answer = loader.apply(parts[2]);
         } catch (Exception | LinkageError e) {
             e.printStackTrace();
-            answer = "error: " + e;
+            answer = e.toString();
         }
         Files.writeString(Path.of(parts[0]), answer);
     }

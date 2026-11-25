@@ -1,14 +1,14 @@
 # ModLoader
 
 Loads mods into a Minecraft that is already running, whether it runs Fabric, Quilt, NeoForge, Forge or no mod
-framework at all, and applies their mixins to the classes the game has long loaded. `modloader.jar` is the command
-line tool, the agent it puts into the game and the loader inside it.
+framework at all, and applies their mixins to the classes the game has long loaded. A launcher does it through the
+Rust library; `modloader` is the same as a command line tool.
 
 Minecraft 26.3 and later, Java 25.
 
 ```mermaid
 flowchart LR
-    cli["java -jar modloader.jar load mod.jar"] -- attach --> agent
+    cli["launcher, or<br/>modloader load mod.jar"] -- attach --> agent
     subgraph game ["running Minecraft"]
         agent --> loader
         loader -- "is the id loaded?" --> framework["Fabric, Quilt, NeoForge, Forge<br/>or none"]
@@ -23,13 +23,39 @@ flowchart LR
 
 ## Use
 
-Take `modloader.jar` from the [snapshot release](https://github.com/CCBlueX/ModLoader/releases/tag/snapshot) and run
-it with a JDK, as the user the game runs as:
+Take `modloader.jar` from the [snapshot release](https://github.com/CCBlueX/ModLoader/releases/tag/snapshot). It is
+the agent that goes into the game, with the loader inside. The Rust crate in [rust](rust) puts it there: a library
+for launchers, and a command line tool built from it. Neither starts a Java of its own: the game's JVM runs the
+agent.
+
+### In a launcher
+
+```toml
+modloader = { git = "https://github.com/CCBlueX/ModLoader" }
+```
+
+```rust
+use modloader::ModLoader;
+
+let loader = ModLoader::new(game.id(), "modloader.jar");
+let loaded = loader.load(Path::new("mods/mymod.jar"))?;   // id, framework, is_new, notes
+let mods = loader.mods()?;                                // what was loaded this way
+loader.unload(&loaded.id)?;
+```
+
+`game` is the process the launcher started; `Jvm::all()` lists the running Java processes for a game it did not
+start. Every call blocks until the game has answered.
+
+### On the command line
+
+Take the `modloader-…` program for your system from the same release and keep it in one folder with
+`modloader.jar`. Run it, here renamed to `modloader`, as the user the game runs as (`chmod +x` it first on Linux and
+macOS):
 
 ```sh
-java -jar modloader.jar load mymod.jar another.jar
-java -jar modloader.jar list
-java -jar modloader.jar unload mymod
+./modloader load mymod.jar another.jar
+./modloader list
+./modloader unload mymod
 ```
 
 The game is found by its command line. `--pid <pid>` names it when several run, or when it was started as a plain
@@ -129,13 +155,15 @@ game exits: what it registered there cannot be taken back.
 
 ## Build
 
+With JDK 25 and Rust installed:
+
 ```sh
-./gradlew build   # cli/build/libs/modloader.jar
+./gradlew build   # agent/build/dist: modloader and modloader.jar
 ```
 
 ## Agent usage
 
-Most of this code was written by AI models. Each declaration they wrote names its model in an `@agent` Javadoc tag.
+Most of this code was written by AI models. Each declaration they wrote names its model in an `@agent` doc tag.
 These are all models used so far and what they cost, summed up by [agent-usage](https://github.com/1zun4/agent-usage):
 
 <a href="https://ccbluex.github.io/ModLoader/ai-usage/">

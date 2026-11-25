@@ -112,9 +112,4 @@ final class Mod implements LoadedMod {
             throw new UncheckedIOException(e);
         }
     }
-
-    @Override
-    public String toString() {
-        return file.id + " (" + file.framework.name() + ") " + file.path;
-    }
 }
