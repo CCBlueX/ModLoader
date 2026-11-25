@@ -232,6 +232,14 @@ impl Jvm {
             .any(|name| command.contains(name))
     }
 
+    /// False for a JVM started with `-XX:+DisableAttachMechanism`, as some clients start theirs: nothing loads into it.
+    pub fn is_attachable(&self) -> bool {
+        !self
+            .command
+            .iter()
+            .any(|argument| argument == "-XX:+DisableAttachMechanism")
+    }
+
     /// The value after `name` on the command line, such as `--gameDir` or `--version`.
     pub fn argument(&self, name: &str) -> Option<&str> {
         let at = self.command.iter().position(|argument| argument == name)?;
@@ -309,6 +317,12 @@ mod tests {
         assert_eq!(Some("/home/me/.minecraft"), game.argument("--gameDir"));
         assert_eq!(None, game.argument("--demo"));
         assert_eq!(None, game.argument("--version"));
+    }
+
+    #[test]
+    fn tells_a_jvm_that_refuses_attach() {
+        assert!(jvm(&["java", "net.minecraft.client.main.Main"]).is_attachable());
+        assert!(!jvm(&["java", "-XX:+DisableAttachMechanism", "net.minecraft.client.main.Main"]).is_attachable());
     }
 
     #[test]

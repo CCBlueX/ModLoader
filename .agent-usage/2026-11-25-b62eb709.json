@@ -1,0 +1,13 @@
+{
+  "date": "2026-11-25",
+  "change": "feat: jvm attachable check",
+  "tool": "omp",
+  "models": [
+    {
+      "model": "claude-fable-5-2",
+      "provider": "anthropic",
+      "tokens": { "input": 32, "cachedInput": 7937358, "cacheWrite": 27753, "output": 15828 },
+      "usd": 2.66
+    }
+  ]
+}
