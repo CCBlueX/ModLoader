@@ -14,11 +14,16 @@ import static net.ccbluex.modloader.liquidbounce.Members.type;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 import net.ccbluex.modloader.api.LoadedMod;
 import net.ccbluex.modloader.api.RuntimeMod;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Starts a LiquidBounce build that has no {@link RuntimeMod} of its own: the game's constructor already ran past
@@ -78,6 +83,7 @@ public final class LateStart implements RuntimeMod {
                 field(moduleHud, "INSTANCE"),
                 method(moduleHud, "reopen"),
                 gameThread);
+        Loading loading = Loading.show(minecraftClass, minecraft);
 
         // Registers the start handlers; at startup the window title mixin gets there first.
         Object instance = get(clientInstance, null);
@@ -103,8 +109,67 @@ public final class LateStart implements RuntimeMod {
         // The reload is for the listeners the start registered. The client's own would initialize it once more
         // while the first initialization is not through, so the reload waits for that.
         initialization.thenRunAsync(
-                () -> ((CompletableFuture<?>) call(reloadResourcePacks, minecraft)).thenRunAsync(hud, gameThread),
+                () -> loading.follow(() -> (CompletableFuture<?>) call(reloadResourcePacks, minecraft))
+                        .thenRunAsync(hud, gameThread),
                 gameThread);
+    }
+
+    /** @agent claude-fable-5-2 */
+    private record Loading(Object gui, Method current, Method setOverlay, @Nullable Object overlay,
+            AtomicReference<@Nullable Object> following) {
+
+        @SuppressWarnings("unchecked")
+        static Loading show(Class<?> minecraftClass, Object minecraft) {
+            Class<?> reload = type("net.minecraft.server.packs.resources.ReloadInstance");
+            Class<?> loadingOverlay = type("net.minecraft.client.gui.screens.LoadingOverlay");
+            Class<?> guiClass = type("net.minecraft.client.gui.Gui");
+            Field followedReload = field(loadingOverlay, "reload");
+            Field followedOnFinish = field(loadingOverlay, "onFinish");
+            Object gui = get(field(minecraftClass, "gui"), minecraft);
+            Method current = method(guiClass, "overlay");
+            Method setOverlay = method(guiClass, "setOverlay", type("net.minecraft.client.gui.screens.Overlay"));
+            AtomicReference<@Nullable Object> following = new AtomicReference<>();
+            Object overlay = null;
+            if (invoke(current, gui) == null && invoke(method(minecraftClass, "getConnection"), minecraft) == null) {
+                Object pending = Proxy.newProxyInstance(reload.getClassLoader(), new Class<?>[] {reload},
+                        (_, method, arguments) -> {
+                            Object followed = following.get();
+                            if (followed != null) {
+                                return invoke(method, get(followedReload, followed), arguments);
+                            }
+                            return switch (method.getName()) {
+                                case "done" -> new CompletableFuture<>();
+                                case "isDone" -> false;
+                                case "getActualProgress" -> 0f;
+                                default -> null;
+                            };
+                        });
+                Consumer<Object> onFinish = error -> {
+                    Object followed = following.get();
+                    if (followed != null) {
+                        ((Consumer<Object>) get(followedOnFinish, followed)).accept(error);
+                    }
+                };
+                overlay = create(constructor(loadingOverlay, minecraftClass, reload, Consumer.class, boolean.class),
+                        minecraft, pending, onFinish, false);
+                invoke(setOverlay, gui, overlay);
+            }
+            return new Loading(gui, current, setOverlay, overlay, following);
+        }
+
+        CompletableFuture<?> follow(Supplier<CompletableFuture<?>> reload) {
+            if (overlay == null || invoke(current, gui) != overlay) {
+                return reload.get();
+            }
+            invoke(setOverlay, gui, (Object) null);
+            CompletableFuture<?> reloaded = reload.get();
+            Object started = invoke(current, gui);
+            if (overlay.getClass().isInstance(started)) {
+                following.set(started);
+                invoke(setOverlay, gui, overlay);
+            }
+            return reloaded;
+        }
     }
 
     /**

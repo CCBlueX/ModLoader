@@ -1,0 +1,13 @@
+{
+  "date": "2026-11-26",
+  "change": "feat: loading overlay",
+  "tool": "omp",
+  "models": [
+    {
+      "model": "claude-fable-5-2",
+      "provider": "anthropic",
+      "tokens": { "input": 78, "cachedInput": 17378178, "cacheWrite": 95671, "output": 46647 },
+      "usd": 6.88
+    }
+  ]
+}

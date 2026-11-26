@@ -174,7 +174,7 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
         // The jars and the mods bundled in them load together, as at startup: they may depend on each other.
         List<Mod> loaded = new ArrayList<>();
         List<Mod> given = new ArrayList<>();
-        try {
+        try (Loading loading = Loading.show()) {
             for (ModFile file : files) {
                 // An earlier jar of the load may be the same mod, or bundle it.
                 if (loaded.stream().anyMatch(mod -> mod.id().equals(file.id))) {
@@ -197,7 +197,10 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
                 }
             }
             MixinManager.Compilation compilation = compileMixins(mods.values());
-            runOnGameThread(() -> start(loaded, compilation, notes));
+            runOnGameThread(() -> {
+                loading.close();
+                start(loaded, compilation, notes);
+            });
         } catch (Exception | LinkageError e) {
             revert(loaded);
             throw e;

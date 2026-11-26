@@ -62,7 +62,7 @@ final class Members {
                 member + " is missing: this LiquidBounce build needs a newer modloader-liquidbounce", cause);
     }
 
-    static @Nullable Object invoke(Method method, @Nullable Object target, Object... arguments) {
+    static @Nullable Object invoke(Method method, @Nullable Object target, @Nullable Object... arguments) {
         try {
             return method.invoke(target, arguments);
         } catch (InvocationTargetException e) {

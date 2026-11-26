@@ -209,6 +209,13 @@ Mixins:
 - `MixinManager.compile` is slow and runs on the attach thread; `apply` (the redefinition) and the mod's start run
   in one task on the client thread while the singleplayer server waits (`ModLoader.runOnGameThread`). A mod's
   handlers running before its start crashed LiquidBounce in a world. A dedicated server keeps ticking meanwhile.
+- On a client outside a world `Loading` puts the game's `LoadingOverlay` up from the start of a load until the
+  task on the client thread begins, unless another overlay is up. It is gone before the mods start, so a mod that
+  starts over several ticks shows its own, as `LateStart` of `compat/liquidbounce` does. A resource reload asked
+  for while a `LoadingOverlay` is up waits until it is gone, and LiquidBounce starts its splash over for every
+  new overlay: `LateStart` takes its own down, starts the reload, and puts its own back in place of the reload's,
+  which it then follows. In a world neither shows an overlay: the player would be blind while the game goes on.
+  `Loading` refuses a load while the game is still starting (no `Minecraft.gui` yet), before anything is loaded.
 - `LateStart` turns LiquidBounce's automatic GUI scale into 2 on the option's value itself: the client's mixin
   does it through `OptionInstance.set`, whose validation asks `Window.calculateScale` once the game runs, and
   Legacy4J's hook there reads the option again (`StackOverflowError`).
