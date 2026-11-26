@@ -8,6 +8,7 @@ import static net.ccbluex.modloader.liquidbounce.Members.field;
 import static net.ccbluex.modloader.liquidbounce.Members.get;
 import static net.ccbluex.modloader.liquidbounce.Members.invoke;
 import static net.ccbluex.modloader.liquidbounce.Members.method;
+import static net.ccbluex.modloader.liquidbounce.Members.read;
 import static net.ccbluex.modloader.liquidbounce.Members.set;
 import static net.ccbluex.modloader.liquidbounce.Members.type;
 
@@ -27,9 +28,11 @@ import org.jspecify.annotations.Nullable;
 
 /**
  * Starts a LiquidBounce build that has no {@link RuntimeMod} of its own: the game's constructor already ran past
- * the mixins that start the client. Such a client cannot be unloaded, so there is nothing to undo here.
+ * the mixins that start the client. Unloading this library turns any LiquidBounce build off as its self-destruct
+ * does, and loading it again turns that client back on: LiquidBounce itself stays loaded.
  *
  * @agent claude-fable-5-2
+ * @agent claude-opus-5-5
  */
 public final class LateStart implements RuntimeMod {
 
@@ -38,6 +41,11 @@ public final class LateStart implements RuntimeMod {
         if (!FabricEntrypoint.hasFolder) {
             throw new IllegalStateException(
                     "LiquidBounce was not given the folder " + System.getProperty("liquidbounce.folder"));
+        }
+        Class<?> selfDestruct = type(CLIENT + "features.misc.SelfDestruct");
+        if ((boolean) call(method(selfDestruct, "isDestructed"), get(field(selfDestruct, "INSTANCE"), null))) {
+            setDestructed(false);
+            return;
         }
         try {
             Class.forName(CLIENT + "LateStart", false, getClass().getClassLoader());
@@ -112,6 +120,39 @@ public final class LateStart implements RuntimeMod {
                 () -> loading.follow(() -> (CompletableFuture<?>) call(reloadResourcePacks, minecraft))
                         .thenRunAsync(hud, gameThread),
                 gameThread);
+    }
+
+    @Override
+    public void unload() {
+        setDestructed(true);
+    }
+
+    private static void setDestructed(boolean isDestructed) {
+        Class<?> selfDestruct = type(CLIENT + "features.misc.SelfDestruct");
+        Object instance = get(field(selfDestruct, "INSTANCE"), null);
+        invoke(method(selfDestruct, "setDestructed", boolean.class), instance, isDestructed);
+        Class<?> screens = type(CLIENT + "integration.screen.ScreenManager");
+        if (isDestructed) {
+            invoke(method(screens, "closeScreen"), get(field(screens, "INSTANCE"), null));
+            Class<?> minecraftClass = type("net.minecraft.client.Minecraft");
+            Object minecraft = call(method(minecraftClass, "getInstance"), null);
+            Class<?> guiClass = type("net.minecraft.client.gui.Gui");
+            Object gui = get(field(minecraftClass, "gui"), minecraft);
+            Object screen = invoke(method(guiClass, "screen"), gui);
+            if (screen != null && screen.getClass().getClassLoader() == screens.getClassLoader()) {
+                Object level = read(field(minecraftClass, "level"), minecraft);
+                Constructor<?> titleScreen = constructor(type("net.minecraft.client.gui.screens.TitleScreen"));
+                Object title = level == null ? create(titleScreen) : null;
+                invoke(method(guiClass, "setScreen", type("net.minecraft.client.gui.screens.Screen")), gui, title);
+            }
+        }
+        invoke(method(selfDestruct, "restoreVanilla"), instance);
+        Class<?> browsers = type(CLIENT + "integration.backend.BrowserBackendManager");
+        boolean hasBrowser = (boolean) call(method(browsers, "isInitialized"), get(field(browsers, "INSTANCE"), null));
+        if (!isDestructed && hasBrowser) {
+            Class<?> moduleHud = type(CLIENT + "features.module.modules.render.ModuleHud");
+            invoke(method(moduleHud, "reopen"), get(field(moduleHud, "INSTANCE"), null));
+        }
     }
 
     /** @agent claude-fable-5-2 */

@@ -1,0 +1,13 @@
+{
+  "date": "2026-11-26",
+  "change": "feat: detach liquidbounce",
+  "tool": "omp",
+  "models": [
+    {
+      "model": "claude-opus-5-5",
+      "provider": "anthropic",
+      "tokens": { "input": 504, "cachedInput": 73313837, "cacheWrite": 785347, "output": 172234 },
+      "usd": 24.39
+    }
+  ]
+}

@@ -87,13 +87,17 @@ final class Members {
         }
     }
 
-    /** A static field with {@code null} as target; reading one initializes its class. */
-    static Object get(Field field, @Nullable Object target) {
+    static @Nullable Object read(Field field, @Nullable Object target) {
         try {
-            return Objects.requireNonNull(field.get(target), field.getName());
+            return field.get(target);
         } catch (IllegalAccessException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /** A static field with {@code null} as target; reading one initializes its class. */
+    static Object get(Field field, @Nullable Object target) {
+        return Objects.requireNonNull(read(field, target), field.getName());
     }
 
     static void set(Field field, Object target, Object value) {

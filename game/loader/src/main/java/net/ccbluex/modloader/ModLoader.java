@@ -196,7 +196,7 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
                     mod.file.register(mod.classLoader);
                 }
             }
-            MixinManager.Compilation compilation = compileMixins(mods.values());
+            MixinManager.Compilation compilation = hasMixins(loaded) ? compileMixins(mods.values()) : null;
             runOnGameThread(() -> {
                 loading.close();
                 start(loaded, compilation, notes);
@@ -242,8 +242,10 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
      * On the game thread. As at the game's start, nothing of the mods runs before they have started, and every mod
      * has run its framework entrypoints before the first RuntimeMod.
      */
-    private void start(List<Mod> loaded, MixinManager.Compilation compilation, List<String> notes) {
-        applyMixins(compilation).forEach(skipped -> notes.add("left out: " + skipped));
+    private void start(List<Mod> loaded, MixinManager.@Nullable Compilation compilation, List<String> notes) {
+        if (compilation != null) {
+            applyMixins(compilation).forEach(skipped -> notes.add("left out: " + skipped));
+        }
         Thread thread = Thread.currentThread();
         ClassLoader context = thread.getContextClassLoader();
         try {
@@ -389,6 +391,10 @@ public final class ModLoader implements UnaryOperator<String>, AutoCloseable {
      */
     List<String> applyMixins() {
         return applyMixins(compileMixins(mods.values()));
+    }
+
+    static boolean hasMixins(List<Mod> mods) {
+        return mods.stream().anyMatch(mod -> !mod.file.mixinConfigs().isEmpty());
     }
 
     private MixinManager.Compilation compileMixins(Collection<Mod> wanted) {

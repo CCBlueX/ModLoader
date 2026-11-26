@@ -67,7 +67,9 @@ quilt or forge, another session's game test included.
   what a framework that did not start the game supplies itself (`Framework.bringsIn`), opening the rest,
   `Framework.bringIn` once per such framework, dependencies, one mixin compilation, one task on the game thread.
   That task runs `Mod.startInFramework` of every mod, then `Mod.start` (the `RuntimeMod`s) of every mod, in the
-  order given. `Mod.start` is where a class of a mod first loads, after every `ModFile.start`.
+  order given. `Mod.start` is where a class of a mod first loads, after every `ModFile.start`. A load or unload
+  whose mods have no mixin configs compiles nothing: each compilation's companions stay with what the game still
+  holds of them, and `modloader-liquidbounce` goes and comes with every detach and attach.
 - A jar `Framework.bringsIn` names has to stay out of `Framework.bringIn`: a Fabric API jar among the mods names
   every module, and `FabricApi.used` would bring all of them. `FabricApi.used` reads the jars it is given and none
   inside them; bundled mods are in the list themselves. A mod the framework brings wins over one of the same id in

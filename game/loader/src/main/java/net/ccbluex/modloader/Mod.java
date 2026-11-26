@@ -97,7 +97,9 @@ final class Mod implements LoadedMod {
         // Before the mods leave the loader: their unload may still load classes from the mods bundled with them.
         going.forEach(mod -> mod.entrypoints.forEach(RuntimeMod::unload));
         loader.remove(this);
-        loader.applyMixins();
+        if (ModLoader.hasMixins(going)) {
+            loader.applyMixins();
+        }
         going.forEach(Mod::close);
     }
 
